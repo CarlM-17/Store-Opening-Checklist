@@ -46,7 +46,29 @@ const SEED_DATA = {
         { id: 'i29', text: 'Air dancer (2 units) must be picked up/delivered today from Valenzuela and installed tomorrow morning, both sides in front', pic: 'Joem', completed: false, remarks: '' }
       ]
     }
-  ]
+  ],
+  workPlan: {
+    items: [
+      { id: 'w1',  time: '5:00 AM', title: 'Store clearing', details: [] },
+      { id: 'w2',  time: '5:30 AM', title: 'Alay time', details: ['All employees must enter the store at 5:30 AM right after the Alay'] },
+      { id: 'w3',  time: '',        title: 'Hang the ampao for the Dragon Dance', details: ['Must be done before the mass'] },
+      { id: 'w4',  time: '',        title: 'Prepare Flowers and Ribbon in front of the store', details: [] },
+      { id: 'w5',  time: '',        title: 'Managers / Supervisors / S.A. final department check', details: ['Verify display fill rate', 'Check shelf tags are complete and correct'] },
+      { id: 'w6',  time: '6:00 AM', title: 'Cashiers proceed to TRS for cash box / change fund', details: ['TRS Staff must be available at 6:00 AM sharp'] },
+      { id: 'w7',  time: '',        title: 'Cashiers prepare change fund inside POS cash drawer at their lane', details: [] },
+      { id: 'w8',  time: '',        title: 'During mass — cashiers remain at their lane (cash drawer closed)', details: [] },
+      { id: 'w9',  time: '',        title: 'Before blessing — Checkout Supervisor opens the cash drawer', details: ['Required for the blessing'] },
+      { id: 'w10', time: '6:00 AM', title: 'Mass Starts', details: ['Brief Priest on the program beforehand', 'A short program follows the mass'] },
+      { id: 'w11', time: '',        title: 'Keep the program short — store must open before 8:00 AM', details: ['Area Manager delivers the speech and acknowledges VIP visitors', 'Confirm with VIP / Gov. Officials in advance if they will give a speech (after the Area Manager)'] },
+      { id: 'w12', time: '',        title: 'Assign personnel to assist the Priest during store blessing', details: ['Plan the blessing route ahead of time', 'Route must cover: back office, selling area, checkout, receiving, warehouse', 'Cash drawers of cashiers must be open during blessing'] },
+      { id: 'w13', time: '',        title: 'Final blessing at the storefront (Flowers & Ribbon area)', details: ['Ribbon cutting participants must be present'] },
+      { id: 'w14', time: '',        title: 'Dragon Dance commences after the blessing', details: ['Cash drawers of cashiers must remain open'] },
+      { id: 'w15', time: '',        title: 'Food distribution to VIP begins', details: [] },
+      { id: 'w16', time: '',        title: 'Signal Customer Service to spiel the opening advisory', details: ['Triggered after the Dragon Dance', 'Script to be prepared in advance'] },
+      { id: 'w17', time: '',        title: 'SSD opens the entrance upon hearing the opening advisory', details: [] },
+      { id: 'w18', time: 'Before opening', title: 'Final check — all manpower on their respective departments', details: [] }
+    ]
+  }
 };
 
 let data;
@@ -55,6 +77,11 @@ function loadData() {
   try {
     if (fs.existsSync(DATA_FILE)) {
       data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
+      // Migration: ensure workPlan exists for older data files
+      if (!data.workPlan || !Array.isArray(data.workPlan.items)) {
+        data.workPlan = SEED_DATA.workPlan;
+        saveData();
+      }
       return;
     }
   } catch (e) {
@@ -92,12 +119,15 @@ app.post('/api/verify', (req, res) => {
   return res.status(401).json({ error: 'Invalid password' });
 });
 
-// PROTECTED: full data save (add/edit/delete items, list management)
+// PROTECTED: full data save (add/edit/delete items, list management, work plan)
 app.post('/api/data', requireAuth, (req, res) => {
   if (!req.body || !Array.isArray(req.body.lists)) {
     return res.status(400).json({ error: 'Invalid payload' });
   }
-  data = { lists: req.body.lists };
+  data.lists = req.body.lists;
+  if (req.body.workPlan && Array.isArray(req.body.workPlan.items)) {
+    data.workPlan = req.body.workPlan;
+  }
   saveData();
   res.json({ ok: true });
 });
@@ -209,6 +239,30 @@ const HTML = `<!DOCTYPE html>
   .modal .actions .save { background: #1B5E20; color: #fff; }
   .saveStatus { position: fixed; bottom: 20px; right: 20px; background: #1B5E20; color: #fff; padding: 8px 14px; border-radius: 6px; font-size: 12px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
   .saveStatus.show { opacity: 1; }
+
+  /* === Work Plan / Timeline === */
+  .wpHeader { background: linear-gradient(135deg, #1B5E20, #2E7D32); color: #fff; border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; }
+  .wpHeader h2 { font-size: 18px; font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
+  .wpHeader p { font-size: 12px; opacity: 0.9; }
+  .timeline { position: relative; padding-left: 36px; }
+  .timeline::before { content: ''; position: absolute; left: 14px; top: 8px; bottom: 8px; width: 2px; background: #1B5E20; opacity: 0.25; }
+  .step { position: relative; background: #fff; border-radius: 10px; padding: 14px 14px 14px 18px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border-left: 4px solid #1B5E20; }
+  .step .dot { position: absolute; left: -30px; top: 14px; width: 28px; height: 28px; border-radius: 50%; background: #1B5E20; color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 3px #fff, 0 0 0 4px #1B5E20; }
+  .step .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 6px; }
+  .step .title { flex: 1; font-size: 14px; font-weight: 600; line-height: 1.4; color: #222; word-wrap: break-word; }
+  .step .time { background: #FFB300; color: #4E342E; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 10px; white-space: nowrap; flex-shrink: 0; }
+  .step .stepActions { display: flex; gap: 2px; flex-shrink: 0; }
+  .step .stepActions button { background: none; border: none; cursor: pointer; padding: 4px 6px; font-size: 14px; color: #666; border-radius: 4px; }
+  .step .stepActions button:hover { background: #f0f0f0; }
+  .step .details { margin: 8px 0 0 4px; padding-left: 16px; }
+  .step .details li { font-size: 13px; color: #444; line-height: 1.5; margin-bottom: 3px; }
+  .addStep { background: #fff; border-radius: 10px; padding: 14px; margin-top: 14px; border: 2px dashed #1B5E20; text-align: center; }
+  .addStep button { background: #1B5E20; color: #fff; border: none; padding: 10px 22px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
+  .addStep button:hover { background: #154a18; }
+  .wpLegend { background: #fff; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 12px; color: #555; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
+  .wpLegend .item { display: flex; align-items: center; gap: 5px; }
+  .wpLegend .sw { width: 14px; height: 14px; border-radius: 50%; background: #1B5E20; }
+  .wpLegend .swT { background: #FFB300; height: 16px; border-radius: 8px; padding: 0 6px; color: #4E342E; font-size: 10px; font-weight: 700; display: flex; align-items: center; }
   @media (max-width: 600px) {
     .topbar h1 { font-size: 15px; }
     .tab { font-size: 11px; padding: 10px 2px; }
@@ -244,6 +298,7 @@ const HTML = `<!DOCTYPE html>
     <div class="tab active" data-tab="all">All <span class="count" id="cAll">0</span></div>
     <div class="tab" data-tab="pending">Pending <span class="count" id="cPending">0</span></div>
     <div class="tab" data-tab="completed">Done <span class="count" id="cCompleted">0</span></div>
+    <div class="tab" data-tab="workplan">Work Plan</div>
     <div class="tab" data-tab="manage">Manage</div>
   </div>
 
@@ -262,6 +317,22 @@ const HTML = `<!DOCTYPE html>
     <div class="actions">
       <button class="cancel" onclick="closeModal()">Cancel</button>
       <button class="save" onclick="saveEdit()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="wpModal">
+  <div class="card">
+    <h3 id="wpModalTitle">Edit Step</h3>
+    <label>Time (optional — e.g. 6:00 AM)</label>
+    <input id="wpTime" type="text" placeholder="Leave blank if no specific time">
+    <label>Step Title</label>
+    <textarea id="wpTitle" placeholder="Short description of the step"></textarea>
+    <label>Sub-details (one per line, optional)</label>
+    <textarea id="wpDetails" placeholder="Detail line 1&#10;Detail line 2" style="min-height:90px;"></textarea>
+    <div class="actions">
+      <button class="cancel" onclick="closeWpModal()">Cancel</button>
+      <button class="save" onclick="saveWpEdit()">Save</button>
     </div>
   </div>
 </div>
@@ -375,7 +446,7 @@ function saveAdmin() {
   return fetch('/api/data', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json', 'X-Admin-Pass': getPass() },
-    body: JSON.stringify({ lists: data.lists })
+    body: JSON.stringify({ lists: data.lists, workPlan: data.workPlan })
   }).then(function(r) {
     if (r.status === 401) {
       clearPass();
@@ -409,6 +480,7 @@ function render() {
     document.getElementById('cPending').textContent = '0';
     document.getElementById('cCompleted').textContent = '0';
     if (currentTab === 'manage') return renderManage();
+    if (currentTab === 'workplan') return renderWorkPlan();
     content.innerHTML = '<div class="empty">No lists yet. Click "Manage" to create one.</div>';
     return;
   }
@@ -426,6 +498,7 @@ function render() {
   document.getElementById('cCompleted').textContent = done;
 
   if (currentTab === 'manage') return renderManage();
+  if (currentTab === 'workplan') return renderWorkPlan();
 
   var filtered;
   if (currentTab === 'pending') filtered = items.filter(function(i) { return !i.completed; });
@@ -496,6 +569,122 @@ function renderManage() {
     '<button onclick="addList()">Add List</button>' +
   '</div></div>';
   document.getElementById('content').innerHTML = html;
+}
+
+// === Work Plan rendering ===
+function renderWorkPlan() {
+  var wp = (data.workPlan && data.workPlan.items) || [];
+  var html = '<div class="wpHeader">' +
+    '<h2>🗓️ Store Opening Work Plan</h2>' +
+    '<p>The sequence of activities for opening day — from store clearing through ribbon cutting and store opening.</p>' +
+    '</div>' +
+    '<div class="wpLegend">' +
+      '<div class="item"><span class="sw"></span> Step</div>' +
+      '<div class="item"><span class="swT">TIME</span> Scheduled time</div>' +
+      '<div class="item">📝 Sub-details below</div>' +
+    '</div>' +
+    '<div class="timeline">';
+
+  if (wp.length === 0) {
+    html += '<div class="empty" style="margin-left:-36px;">No steps yet.</div>';
+  } else {
+    wp.forEach(function(s, idx) {
+      var num = idx + 1;
+      var timeBadge = s.time ? '<span class="time">⏰ ' + escapeHtml(s.time) + '</span>' : '';
+      var detailsHtml = '';
+      if (s.details && s.details.length) {
+        detailsHtml = '<ul class="details">' +
+          s.details.map(function(d) { return '<li>' + escapeHtml(d) + '</li>'; }).join('') +
+          '</ul>';
+      }
+      html += '<div class="step">' +
+        '<div class="dot">' + num + '</div>' +
+        '<div class="head">' +
+          '<div class="title">' + escapeHtml(s.title) + '</div>' +
+          timeBadge +
+          '<div class="stepActions">' +
+            '<button onclick="openWpEdit(\\'' + s.id + '\\')" title="Edit">✏️</button>' +
+            '<button onclick="delWpStep(\\'' + s.id + '\\')" title="Delete">🗑️</button>' +
+          '</div>' +
+        '</div>' +
+        detailsHtml +
+      '</div>';
+    });
+  }
+
+  html += '</div>' +
+    '<div class="addStep"><button onclick="addWpStep()">➕ Add New Step</button></div>';
+
+  document.getElementById('content').innerHTML = html;
+}
+
+function ensureWorkPlan() {
+  if (!data.workPlan) data.workPlan = { items: [] };
+  if (!Array.isArray(data.workPlan.items)) data.workPlan.items = [];
+}
+
+function openWpEdit(id) {
+  withAuth(function() {
+    ensureWorkPlan();
+    var step = data.workPlan.items.find(function(s) { return s.id === id; });
+    if (!step) return;
+    document.getElementById('wpModalTitle').textContent = 'Edit Step';
+    document.getElementById('wpTime').value = step.time || '';
+    document.getElementById('wpTitle').value = step.title || '';
+    document.getElementById('wpDetails').value = (step.details || []).join('\\n');
+    document.getElementById('wpModal').dataset.editingId = id;
+    document.getElementById('wpModal').dataset.mode = 'edit';
+    document.getElementById('wpModal').classList.add('show');
+  });
+}
+
+function addWpStep() {
+  withAuth(function() {
+    document.getElementById('wpModalTitle').textContent = 'Add New Step';
+    document.getElementById('wpTime').value = '';
+    document.getElementById('wpTitle').value = '';
+    document.getElementById('wpDetails').value = '';
+    document.getElementById('wpModal').dataset.editingId = '';
+    document.getElementById('wpModal').dataset.mode = 'add';
+    document.getElementById('wpModal').classList.add('show');
+  });
+}
+
+function closeWpModal() {
+  document.getElementById('wpModal').classList.remove('show');
+}
+
+function saveWpEdit() {
+  ensureWorkPlan();
+  var modal = document.getElementById('wpModal');
+  var mode = modal.dataset.mode;
+  var time = document.getElementById('wpTime').value.trim();
+  var title = document.getElementById('wpTitle').value.trim();
+  var detailsRaw = document.getElementById('wpDetails').value;
+  var details = detailsRaw.split('\\n').map(function(s) { return s.trim(); }).filter(Boolean);
+  if (!title) { alert('Title is required.'); return; }
+
+  if (mode === 'add') {
+    data.workPlan.items.push({ id: 'w' + Date.now().toString(36), time: time, title: title, details: details });
+  } else {
+    var id = modal.dataset.editingId;
+    var step = data.workPlan.items.find(function(s) { return s.id === id; });
+    if (!step) { closeWpModal(); return; }
+    step.time = time;
+    step.title = title;
+    step.details = details;
+  }
+  closeWpModal();
+  saveAdmin().then(render);
+}
+
+function delWpStep(id) {
+  withAuth(function() {
+    if (!confirm('Delete this step?')) return;
+    ensureWorkPlan();
+    data.workPlan.items = data.workPlan.items.filter(function(s) { return s.id !== id; });
+    saveAdmin().then(render);
+  });
 }
 
 // Tab handlers
@@ -651,6 +840,9 @@ function deleteList(id) {
 // Close modal on outside click
 document.getElementById('editModal').addEventListener('click', function(e) {
   if (e.target.id === 'editModal') closeModal();
+});
+document.getElementById('wpModal').addEventListener('click', function(e) {
+  if (e.target.id === 'wpModal') closeWpModal();
 });
 
 load();
