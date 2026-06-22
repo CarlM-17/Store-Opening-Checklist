@@ -176,6 +176,10 @@ const HTML = `<!DOCTYPE html>
   .topbar .lock { background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: #fff; font-size: 11px; padding: 5px 10px; border-radius: 14px; cursor: pointer; font-weight: 600; }
   .topbar .lock.unlocked { background: #c8e6c9; color: #1B5E20; border-color: #c8e6c9; }
   .container { max-width: 900px; margin: 0 auto; padding: 14px; }
+  .primaryTabs { display: flex; gap: 8px; margin-bottom: 12px; background: #fff; padding: 6px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
+  .pTab { flex: 1; padding: 12px 8px; border: none; background: transparent; cursor: pointer; font-size: 14px; font-weight: 700; color: #555; border-radius: 8px; transition: all 0.2s; font-family: inherit; }
+  .pTab:hover { background: #f5f5f5; }
+  .pTab.active { background: #1B5E20; color: #fff; box-shadow: 0 2px 6px rgba(27,94,32,0.3); }
   .listSelector { background: #fff; padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; display: flex; gap: 8px; align-items: center; }
   .listSelector label { font-size: 12px; color: #555; font-weight: 600; }
   .listSelector select { flex: 1; padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; background: #fff; }
@@ -273,7 +277,7 @@ const HTML = `<!DOCTYPE html>
 <body>
 
 <div class="topbar">
-  <h1>📋 Store Opening Checklist</h1>
+  <h1>📋 Store Opening Checklist <span style="opacity:0.7;font-weight:400;">and</span> Work Plan</h1>
   <div class="right">
     <span class="by">By Carl_M@17</span>
     <button class="lock" id="lockBtn" onclick="toggleLock()">🔒 Locked</button>
@@ -281,25 +285,33 @@ const HTML = `<!DOCTYPE html>
 </div>
 
 <div class="container">
-  <div class="listSelector">
-    <label>List:</label>
-    <select id="listSelect"></select>
+  <!-- Primary section tabs -->
+  <div class="primaryTabs">
+    <button class="pTab active" data-section="checklist">📋 Checklist</button>
+    <button class="pTab" data-section="workplan">🗓️ Work Plan</button>
   </div>
 
-  <div class="progress">
-    <div class="label">
-      <span id="progressLabel">0 / 0 completed</span>
-      <span class="pct" id="progressPct">0%</span>
+  <!-- Checklist-only header (hidden when Work Plan is active) -->
+  <div id="checklistHeader">
+    <div class="listSelector">
+      <label>List:</label>
+      <select id="listSelect"></select>
     </div>
-    <div class="bar"><div class="fill" id="progressFill" style="width:0%"></div></div>
-  </div>
 
-  <div class="tabs">
-    <div class="tab active" data-tab="all">All <span class="count" id="cAll">0</span></div>
-    <div class="tab" data-tab="pending">Pending <span class="count" id="cPending">0</span></div>
-    <div class="tab" data-tab="completed">Done <span class="count" id="cCompleted">0</span></div>
-    <div class="tab" data-tab="workplan">Work Plan</div>
-    <div class="tab" data-tab="manage">Manage</div>
+    <div class="progress">
+      <div class="label">
+        <span id="progressLabel">0 / 0 completed</span>
+        <span class="pct" id="progressPct">0%</span>
+      </div>
+      <div class="bar"><div class="fill" id="progressFill" style="width:0%"></div></div>
+    </div>
+
+    <div class="tabs">
+      <div class="tab active" data-tab="all">All <span class="count" id="cAll">0</span></div>
+      <div class="tab" data-tab="pending">Pending <span class="count" id="cPending">0</span></div>
+      <div class="tab" data-tab="completed">Done <span class="count" id="cCompleted">0</span></div>
+      <div class="tab" data-tab="manage">Manage</div>
+    </div>
   </div>
 
   <div id="content"></div>
@@ -341,6 +353,7 @@ const HTML = `<!DOCTYPE html>
 
 <script>
 var data = { lists: [] };
+var currentSection = 'checklist'; // 'checklist' | 'workplan'
 var currentTab = 'all';
 var editingItemId = null;
 var saveTimer = null;
@@ -458,6 +471,16 @@ function saveAdmin() {
 }
 
 function render() {
+  // Show/hide the checklist-only header based on active section
+  var checklistHeader = document.getElementById('checklistHeader');
+  checklistHeader.style.display = (currentSection === 'workplan') ? 'none' : 'block';
+
+  // Work Plan section: render timeline and return
+  if (currentSection === 'workplan') {
+    return renderWorkPlan();
+  }
+
+  // === Checklist section ===
   // Populate list selector
   var sel = document.getElementById('listSelect');
   sel.innerHTML = '';
@@ -480,7 +503,6 @@ function render() {
     document.getElementById('cPending').textContent = '0';
     document.getElementById('cCompleted').textContent = '0';
     if (currentTab === 'manage') return renderManage();
-    if (currentTab === 'workplan') return renderWorkPlan();
     content.innerHTML = '<div class="empty">No lists yet. Click "Manage" to create one.</div>';
     return;
   }
@@ -498,7 +520,6 @@ function render() {
   document.getElementById('cCompleted').textContent = done;
 
   if (currentTab === 'manage') return renderManage();
-  if (currentTab === 'workplan') return renderWorkPlan();
 
   var filtered;
   if (currentTab === 'pending') filtered = items.filter(function(i) { return !i.completed; });
@@ -687,7 +708,17 @@ function delWpStep(id) {
   });
 }
 
-// Tab handlers
+// Primary section tabs (Checklist / Work Plan)
+document.querySelectorAll('.pTab').forEach(function(t) {
+  t.addEventListener('click', function() {
+    document.querySelectorAll('.pTab').forEach(function(x) { x.classList.remove('active'); });
+    t.classList.add('active');
+    currentSection = t.dataset.section;
+    render();
+  });
+});
+
+// Secondary tab handlers (All / Pending / Done / Manage — inside Checklist)
 document.querySelectorAll('.tab').forEach(function(t) {
   t.addEventListener('click', function() {
     document.querySelectorAll('.tab').forEach(function(x) { x.classList.remove('active'); });
