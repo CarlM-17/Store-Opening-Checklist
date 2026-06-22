@@ -5,11 +5,11 @@ const path = require('path');
 const app = express();
 const PORT = process.env.PORT || 3000;
 const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data.json');
+const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'carl@17';
 
 app.use(express.json({ limit: '5mb' }));
 
 const SEED_DATA = {
-  activeListId: 'congressional',
   lists: [
     {
       id: 'congressional',
@@ -74,14 +74,58 @@ function saveData() {
 
 loadData();
 
+// Auth middleware — admin password required
+function requireAuth(req, res, next) {
+  var pass = req.headers['x-admin-pass'];
+  if (pass !== ADMIN_PASSWORD) {
+    return res.status(401).json({ error: 'Invalid password' });
+  }
+  next();
+}
+
 // API
 app.get('/api/data', (req, res) => res.json(data));
 
-app.post('/api/data', (req, res) => {
+// Verify password (used by client to validate before storing in sessionStorage)
+app.post('/api/verify', (req, res) => {
+  if ((req.body && req.body.password) === ADMIN_PASSWORD) return res.json({ ok: true });
+  return res.status(401).json({ error: 'Invalid password' });
+});
+
+// PROTECTED: full data save (add/edit/delete items, list management)
+app.post('/api/data', requireAuth, (req, res) => {
   if (!req.body || !Array.isArray(req.body.lists)) {
     return res.status(400).json({ error: 'Invalid payload' });
   }
-  data = req.body;
+  data = { lists: req.body.lists };
+  saveData();
+  res.json({ ok: true });
+});
+
+// OPEN: toggle completed (anyone on the team can mark progress)
+app.post('/api/check', (req, res) => {
+  var listId = req.body && req.body.listId;
+  var itemId = req.body && req.body.itemId;
+  var completed = !!(req.body && req.body.completed);
+  var list = data.lists.find(function(l) { return l.id === listId; });
+  if (!list) return res.status(404).json({ error: 'List not found' });
+  var item = list.items.find(function(i) { return i.id === itemId; });
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  item.completed = completed;
+  saveData();
+  res.json({ ok: true });
+});
+
+// OPEN: update remarks (anyone can add update notes)
+app.post('/api/remarks', (req, res) => {
+  var listId = req.body && req.body.listId;
+  var itemId = req.body && req.body.itemId;
+  var remarks = (req.body && req.body.remarks) || '';
+  var list = data.lists.find(function(l) { return l.id === listId; });
+  if (!list) return res.status(404).json({ error: 'List not found' });
+  var item = list.items.find(function(i) { return i.id === itemId; });
+  if (!item) return res.status(404).json({ error: 'Item not found' });
+  item.remarks = String(remarks).slice(0, 2000);
   saveData();
   res.json({ ok: true });
 });
@@ -97,7 +141,10 @@ const HTML = `<!DOCTYPE html>
   body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f5f7; color: #222; padding-bottom: 40px; }
   .topbar { background: #1B5E20; color: #fff; padding: 14px 18px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
   .topbar h1 { font-size: 17px; font-weight: 600; }
+  .topbar .right { display: flex; gap: 10px; align-items: center; }
   .topbar .by { font-size: 11px; opacity: 0.9; }
+  .topbar .lock { background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: #fff; font-size: 11px; padding: 5px 10px; border-radius: 14px; cursor: pointer; font-weight: 600; }
+  .topbar .lock.unlocked { background: #c8e6c9; color: #1B5E20; border-color: #c8e6c9; }
   .container { max-width: 900px; margin: 0 auto; padding: 14px; }
   .listSelector { background: #fff; padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; display: flex; gap: 8px; align-items: center; }
   .listSelector label { font-size: 12px; color: #555; font-weight: 600; }
@@ -173,7 +220,10 @@ const HTML = `<!DOCTYPE html>
 
 <div class="topbar">
   <h1>📋 Store Opening Checklist</h1>
-  <span class="by">By Carl_M@17</span>
+  <div class="right">
+    <span class="by">By Carl_M@17</span>
+    <button class="lock" id="lockBtn" onclick="toggleLock()">🔒 Locked</button>
+  </div>
 </div>
 
 <div class="container">
@@ -219,10 +269,61 @@ const HTML = `<!DOCTYPE html>
 <div class="saveStatus" id="saveStatus">Saved ✓</div>
 
 <script>
-var data = { lists: [], activeListId: null };
+var data = { lists: [] };
 var currentTab = 'all';
 var editingItemId = null;
 var saveTimer = null;
+var activeListId = localStorage.getItem('activeListId') || null;
+
+// ===== Auth =====
+function getPass() { return sessionStorage.getItem('adminPass') || ''; }
+function setPass(p) { sessionStorage.setItem('adminPass', p); updateLockUI(); }
+function clearPass() { sessionStorage.removeItem('adminPass'); updateLockUI(); }
+function isUnlocked() { return !!getPass(); }
+
+function updateLockUI() {
+  var btn = document.getElementById('lockBtn');
+  if (!btn) return;
+  if (isUnlocked()) {
+    btn.textContent = '🔓 Unlocked';
+    btn.classList.add('unlocked');
+  } else {
+    btn.textContent = '🔒 Locked';
+    btn.classList.remove('unlocked');
+  }
+}
+
+function toggleLock() {
+  if (isUnlocked()) {
+    if (confirm('Lock the app? You will need the password again for edit/delete/add.')) clearPass();
+  } else {
+    promptPassword();
+  }
+}
+
+function promptPassword(cb) {
+  var p = prompt('Enter admin password:');
+  if (!p) { if (cb) cb(false); return; }
+  fetch('/api/verify', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ password: p })
+  }).then(function(r) {
+    if (r.ok) {
+      setPass(p);
+      if (cb) cb(true);
+    } else {
+      alert('Wrong password.');
+      if (cb) cb(false);
+    }
+  });
+}
+
+// Ensures unlocked before running cb()
+function withAuth(cb) {
+  if (isUnlocked()) return cb();
+  promptPassword(function(ok) { if (ok) cb(); });
+}
 
 function escapeHtml(s) {
   s = String(s == null ? '' : s);
@@ -247,7 +348,7 @@ function parseItem(line) {
 }
 
 function activeList() {
-  return data.lists.find(function(l) { return l.id === data.activeListId; }) || data.lists[0];
+  return data.lists.find(function(l) { return l.id === activeListId; }) || data.lists[0];
 }
 
 function showSaved() {
@@ -260,17 +361,29 @@ function showSaved() {
 function load() {
   return fetch('/api/data').then(function(r) { return r.json(); }).then(function(d) {
     data = d;
-    if (!data.activeListId && data.lists.length) data.activeListId = data.lists[0].id;
+    if (!activeListId || !data.lists.find(function(l) { return l.id === activeListId; })) {
+      activeListId = data.lists.length ? data.lists[0].id : null;
+      if (activeListId) localStorage.setItem('activeListId', activeListId);
+    }
+    updateLockUI();
     render();
   });
 }
 
-function save() {
+// Admin save (protected) — sends full data, requires password
+function saveAdmin() {
   return fetch('/api/data', {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(data)
-  }).then(function() { showSaved(); });
+    headers: { 'Content-Type': 'application/json', 'X-Admin-Pass': getPass() },
+    body: JSON.stringify({ lists: data.lists })
+  }).then(function(r) {
+    if (r.status === 401) {
+      clearPass();
+      alert('Session expired or wrong password. Please unlock again.');
+      return load();
+    }
+    showSaved();
+  });
 }
 
 function render() {
@@ -281,7 +394,7 @@ function render() {
     var opt = document.createElement('option');
     opt.value = l.id;
     opt.textContent = l.name;
-    if (l.id === data.activeListId) opt.selected = true;
+    if (l.id === activeListId) opt.selected = true;
     sel.appendChild(opt);
   });
 
@@ -365,7 +478,7 @@ function renderManage() {
     html += '<div style="color:#888;font-size:13px;margin-bottom:10px;">No lists yet. Add one below.</div>';
   }
   data.lists.forEach(function(l) {
-    var isActive = l.id === data.activeListId;
+    var isActive = l.id === activeListId;
     html += '<div class="listRow ' + (isActive ? 'active' : '') + '">' +
       '<span class="name">' + escapeHtml(l.name) +
         ' <span class="count">(' + l.items.length + ' items)</span></span>';
@@ -396,61 +509,82 @@ document.querySelectorAll('.tab').forEach(function(t) {
 });
 
 document.getElementById('listSelect').addEventListener('change', function(e) {
-  data.activeListId = e.target.value;
-  save().then(render);
+  activeListId = e.target.value;
+  localStorage.setItem('activeListId', activeListId);
+  render();
 });
 
+// OPEN — uses /api/check, no password needed
 function toggle(id) {
   var list = activeList();
+  if (!list) return;
   var item = list.items.find(function(i) { return i.id === id; });
   if (!item) return;
   item.completed = !item.completed;
-  save().then(render);
+  render();
+  fetch('/api/check', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ listId: list.id, itemId: id, completed: item.completed })
+  }).then(showSaved);
 }
 
+// OPEN — uses /api/remarks, no password needed
 function updateRemarks(id, val) {
   var list = activeList();
+  if (!list) return;
   var item = list.items.find(function(i) { return i.id === id; });
   if (!item) return;
   if (item.remarks === val) return;
   item.remarks = val;
-  save();
+  fetch('/api/remarks', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ listId: list.id, itemId: id, remarks: val })
+  }).then(showSaved);
 }
 
+// PROTECTED
 function del(id) {
-  if (!confirm('Delete this item?')) return;
-  var list = activeList();
-  list.items = list.items.filter(function(i) { return i.id !== id; });
-  save().then(render);
+  withAuth(function() {
+    if (!confirm('Delete this item?')) return;
+    var list = activeList();
+    list.items = list.items.filter(function(i) { return i.id !== id; });
+    saveAdmin().then(render);
+  });
 }
 
 function addItem() {
-  var input = document.getElementById('newItemText');
-  var val = input.value.trim();
-  if (!val) return;
-  var parsed = parseItem(val);
-  var list = activeList();
-  if (!list) { alert('Create or select a list first.'); return; }
-  list.items.push({
-    id: uid(),
-    text: parsed.text,
-    pic: parsed.pic,
-    completed: false,
-    remarks: ''
+  withAuth(function() {
+    var input = document.getElementById('newItemText');
+    var val = input.value.trim();
+    if (!val) return;
+    var parsed = parseItem(val);
+    var list = activeList();
+    if (!list) { alert('Create or select a list first.'); return; }
+    list.items.push({
+      id: uid(),
+      text: parsed.text,
+      pic: parsed.pic,
+      completed: false,
+      remarks: ''
+    });
+    input.value = '';
+    saveAdmin().then(render);
   });
-  input.value = '';
-  save().then(render);
 }
 
 function openEdit(id) {
-  var list = activeList();
-  var item = list.items.find(function(i) { return i.id === id; });
-  if (!item) return;
-  editingItemId = id;
-  document.getElementById('editText').value = item.text;
-  document.getElementById('editPic').value = item.pic;
-  document.getElementById('editRemarks').value = item.remarks || '';
-  document.getElementById('editModal').classList.add('show');
+  withAuth(function() {
+    var list = activeList();
+    var item = list.items.find(function(i) { return i.id === id; });
+    if (!item) return;
+    editingItemId = id;
+    document.getElementById('editText').value = item.text;
+    document.getElementById('editPic').value = item.pic;
+    document.getElementById('editRemarks').value = item.remarks || '';
+    document.getElementById('editModal').classList.add('show');
+  });
 }
 
 function closeModal() {
@@ -466,40 +600,52 @@ function saveEdit() {
   item.pic = document.getElementById('editPic').value.trim();
   item.remarks = document.getElementById('editRemarks').value;
   closeModal();
-  save().then(render);
+  saveAdmin().then(render);
 }
 
 function addList() {
-  var input = document.getElementById('newListName');
-  var val = input.value.trim();
-  if (!val) return;
-  var id = 'list_' + Date.now().toString(36);
-  data.lists.push({ id: id, name: val, items: [] });
-  data.activeListId = id;
-  save().then(render);
+  withAuth(function() {
+    var input = document.getElementById('newListName');
+    var val = input.value.trim();
+    if (!val) return;
+    var id = 'list_' + Date.now().toString(36);
+    data.lists.push({ id: id, name: val, items: [] });
+    activeListId = id;
+    localStorage.setItem('activeListId', activeListId);
+    saveAdmin().then(render);
+  });
 }
 
+// OPEN — just switches local view, no server change
 function setActive(id) {
-  data.activeListId = id;
-  save().then(render);
+  activeListId = id;
+  localStorage.setItem('activeListId', activeListId);
+  render();
 }
 
 function renameList(id) {
-  var list = data.lists.find(function(l) { return l.id === id; });
-  if (!list) return;
-  var name = prompt('New name:', list.name);
-  if (name && name.trim()) {
-    list.name = name.trim();
-    save().then(render);
-  }
+  withAuth(function() {
+    var list = data.lists.find(function(l) { return l.id === id; });
+    if (!list) return;
+    var name = prompt('New name:', list.name);
+    if (name && name.trim()) {
+      list.name = name.trim();
+      saveAdmin().then(render);
+    }
+  });
 }
 
 function deleteList(id) {
-  if (data.lists.length <= 1) { alert('Cannot delete the only list. Create another first.'); return; }
-  if (!confirm('Delete this list and ALL its items? This cannot be undone.')) return;
-  data.lists = data.lists.filter(function(l) { return l.id !== id; });
-  if (data.activeListId === id) data.activeListId = data.lists[0].id;
-  save().then(render);
+  withAuth(function() {
+    if (data.lists.length <= 1) { alert('Cannot delete the only list. Create another first.'); return; }
+    if (!confirm('Delete this list and ALL its items? This cannot be undone.')) return;
+    data.lists = data.lists.filter(function(l) { return l.id !== id; });
+    if (activeListId === id) {
+      activeListId = data.lists[0].id;
+      localStorage.setItem('activeListId', activeListId);
+    }
+    saveAdmin().then(render);
+  });
 }
 
 // Close modal on outside click
