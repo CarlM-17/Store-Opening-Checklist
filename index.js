@@ -13,38 +13,6 @@ const DEFAULT_SHEET_NAME = SHEET_NAMES[0] || 'Checklist';
 const SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '';
 const PRIVATE_KEY = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
-const headers = ['id', 'task', 'done', 'notes', 'updated_by', 'updated_at'];
-const starterTasks = [
-  ['pick-up-pushcart', 'Pick up pushcart, Trolly and basket', 'FALSE', '', '', ''],
-  ['others-pick-up', 'Others for pick up (supplies and fixed assets)', 'FALSE', '', '', ''],
-  ['water-connection', 'Water connection', 'FALSE', '', '', ''],
-  ['high-value-showcase', 'High value show case for wines and liquor and canned goods', 'FALSE', '', '', ''],
-  ['promo-gondola', 'Promo items gondola lacking 1', 'FALSE', '', '', ''],
-  ['weighing-scale', 'Weighing scale', 'FALSE', '', '', ''],
-  ['small-island-freezer', 'Patungan island freezer the small one', 'FALSE', '', '', ''],
-  ['tnap-booth', 'TNAP booth', 'FALSE', '', '', ''],
-  ['manager-workstation', 'Work station set up for Managers and Supervisors', 'FALSE', '', '', ''],
-  ['fillrate', '100% Fillrate for Display and shelftag (we are behind 2 days already)', 'FALSE', '', '', ''],
-  ['rfp-business-permit', 'Ron follow up RFP for business permit (already coordinated to Maam Emy yesterday)', 'FALSE', '', '', ''],
-  ['borrow-opening-support', 'Borrow pushcart, Trolly and Basket to other stores for opening support (Chari, Sheila assess how many)', 'FALSE', '', '', ''],
-  ['opening-budget', 'Follow up opening budget to Baby Grace Valido', 'FALSE', '', '', ''],
-  ['checkout-refurbish', 'Checkout counter to finish refurbish tomorrow (No extension), POS to set up after. (Sheila monitor this)', 'FALSE', '', '', ''],
-  ['scan-items', 'Once POS already set up, start scanning of items (all items must be scanned)', 'FALSE', '', '', ''],
-  ['island-freezers-operational', 'Island freezers must be operational starting today - pick up lacking island freezers in Valenzuela', 'FALSE', '', '', ''],
-  ['vip-priest', 'Ron to provide final list of VIP to invite in store opening. Find Priest also for Mass', 'FALSE', '', '', ''],
-  ['store-cleaning', 'Continuous cleaning of store interior / exterior', 'FALSE', '', '', ''],
-  ['parking-pressure-washer', 'Parking Area - clean with pressure washer', 'FALSE', '', '', ''],
-  ['lamp-post-banners', 'After payment of business permit, creative team to start installation of lamp post banners with wood frame. Make sure LGU approval was already done. Creative team c/o Emil must prepare today the number of lamp post banners to install.', 'FALSE', '', '', ''],
-  ['checkout-chain', 'Make sure Checkout counter must have chain', 'FALSE', '', '', ''],
-  ['wine-liquor-showcase-deadline', 'Deadline for Wines and Liquor, Canned Meat high value glass showcase will be on Friday. Coordinate to Marifel for RS alignment', 'FALSE', '', '', ''],
-  ['fresh-items-delivery', 'Delivery of Fresh items must be ongoing by now', 'FALSE', '', '', ''],
-  ['backup-manpower', 'Prepare list of back up manpower', 'FALSE', '', '', ''],
-  ['backup-cashiers-baggers', 'Cashiers and baggers', 'FALSE', '', '', ''],
-  ['backup-sales-assistant', 'Sales Assistant', 'FALSE', '', '', ''],
-  ['backup-supervisors', 'Supervisors', 'FALSE', '', '', ''],
-  ['hbc-acrylic-fence', 'Acrylic fence at HBC', 'FALSE', '', '', '']
-];
-
 app.use(express.json({ limit: '1mb' }));
 
 function parseSheetId(value) {
@@ -88,10 +56,15 @@ function isDone(value) {
   return ['true', 'yes', 'y', '1', 'done', 'complete', 'completed'].includes(String(value || '').trim().toLowerCase());
 }
 
-function rowToItem(row, index) {
+function isHeaderRow(row) {
+  const normalized = row.map((cell) => String(cell || '').trim().toLowerCase());
+  return normalized[0] === 'id' && normalized[1] === 'task';
+}
+
+function rowToItem(row, rowNumber) {
   return {
-    rowNumber: index + 2,
-    id: row[0] || `row-${index + 2}`,
+    rowNumber,
+    id: String(row[0] || `row-${rowNumber}`).trim(),
     task: row[1] || '',
     done: isDone(row[2]),
     notes: row[3] || '',
@@ -100,16 +73,68 @@ function rowToItem(row, index) {
   };
 }
 
+function rowsToItems(rows) {
+  const offset = rows[0] && isHeaderRow(rows[0]) ? 2 : 1;
+  const bodyRows = offset === 2 ? rows.slice(1) : rows;
+  return bodyRows
+    .map((row, index) => rowToItem(row, index + offset))
+    .filter((item) => item.task.trim());
+}
+
+function parseCsv(csv) {
+  const rows = [];
+  let row = [];
+  let value = '';
+  let quoted = false;
+
+  for (let index = 0; index < csv.length; index += 1) {
+    const character = csv[index];
+    const next = csv[index + 1];
+
+    if (character === '"' && quoted && next === '"') {
+      value += '"';
+      index += 1;
+    } else if (character === '"') {
+      quoted = !quoted;
+    } else if (character === ',' && !quoted) {
+      row.push(value);
+      value = '';
+    } else if ((character === '\n' || character === '\r') && !quoted) {
+      if (character === '\r' && next === '\n') index += 1;
+      row.push(value);
+      if (row.some((cell) => cell.trim())) rows.push(row);
+      row = [];
+      value = '';
+    } else {
+      value += character;
+    }
+  }
+
+  row.push(value);
+  if (row.some((cell) => cell.trim())) rows.push(row);
+  return rows;
+}
+
 async function readItems(sheetName) {
+  if (!hasGoogleConfig()) {
+    const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
+    const response = await fetch(url);
+    if (!response.ok) {
+      const error = new Error('Could not read the public Google Sheet.');
+      error.statusCode = 502;
+      throw error;
+    }
+
+    return rowsToItems(parseCsv(await response.text()));
+  }
+
   const sheets = sheetsClient();
   const response = await sheets.spreadsheets.values.get({
     spreadsheetId: SHEET_ID,
-    range: `'${sheetName}'!A2:F`
+    range: `'${sheetName}'!A:F`
   });
 
-  return (response.data.values || [])
-    .map(rowToItem)
-    .filter((item) => item.task.trim());
+  return rowsToItems(response.data.values || []);
 }
 
 async function findItemRow(sheetName, id) {
@@ -143,6 +168,12 @@ app.get('/api/items', async (req, res, next) => {
 
 app.post('/api/items/:id', async (req, res, next) => {
   try {
+    if (!hasGoogleConfig()) {
+      const error = new Error('The sheet is connected for viewing. Add the Google service account credentials to save updates from the app.');
+      error.statusCode = 403;
+      throw error;
+    }
+
     const sheetName = selectedSheetName(req);
     const { done, notes, updatedBy } = req.body;
     const item = await findItemRow(sheetName, req.params.id);
@@ -164,41 +195,24 @@ app.post('/api/items/:id', async (req, res, next) => {
   }
 });
 
-app.post('/api/seed', async (req, res, next) => {
-  try {
-    const sheetName = selectedSheetName(req);
-    const sheets = sheetsClient();
-    await sheets.spreadsheets.values.update({
-      spreadsheetId: SHEET_ID,
-      range: `'${sheetName}'!A1:F${starterTasks.length + 1}`,
-      valueInputOption: 'USER_ENTERED',
-      requestBody: {
-        values: [headers, ...starterTasks]
-      }
-    });
-
-    res.json({ ok: true, sheetName, insertedRows: starterTasks.length });
-  } catch (error) {
-    next(error);
-  }
-});
-
 app.get('/', (req, res) => {
   res.type('html').send(`<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
-  <title>Opening Checklist</title>
+  <title>Store Opening Checklist</title>
   <style>
     :root {
-      --bg: #f5f6f2;
+      --bg: #f4f6f1;
       --surface: #ffffff;
       --text: #20251f;
       --muted: #697368;
       --line: #dfe4da;
       --accent: #14684d;
       --accent-soft: #e6f2ec;
+      --gold: #c7932c;
+      --ink: #24352f;
       --danger: #9d2d20;
       --amber: #996500;
       --shadow: 0 12px 32px rgba(24, 36, 28, .1);
@@ -210,16 +224,19 @@ app.get('/', (req, res) => {
       margin: 0;
       font-family: Arial, Helvetica, sans-serif;
       color: var(--text);
-      background: var(--bg);
+      background:
+        linear-gradient(180deg, rgba(20, 104, 77, .08), transparent 300px),
+        var(--bg);
     }
 
     header {
-      position: sticky;
-      top: 0;
+      position: relative;
       z-index: 10;
-      border-bottom: 1px solid var(--line);
-      background: rgba(245, 246, 242, .94);
-      backdrop-filter: blur(12px);
+      overflow: hidden;
+      border-bottom: 1px solid rgba(20, 104, 77, .16);
+      background:
+        linear-gradient(135deg, rgba(20, 104, 77, .16), rgba(199, 147, 44, .12)),
+        rgba(245, 246, 242, .96);
     }
 
     .wrap {
@@ -229,23 +246,83 @@ app.get('/', (req, res) => {
 
     .top {
       display: grid;
-      grid-template-columns: 1fr auto;
-      gap: 20px;
+      grid-template-columns: 1fr minmax(230px, 330px) auto;
+      gap: 24px;
       align-items: center;
-      padding: 18px 0;
+      padding: 24px 0;
     }
 
     h1 {
       margin: 0;
-      font-size: clamp(24px, 4vw, 40px);
+      font-size: clamp(28px, 4vw, 46px);
       line-height: 1.05;
       letter-spacing: 0;
     }
 
-    .sub {
-      margin-top: 8px;
-      color: var(--muted);
-      font-size: 14px;
+    .headline {
+      display: inline-flex;
+      align-items: center;
+      gap: 10px;
+      margin-bottom: 8px;
+      color: var(--accent);
+      font-size: 13px;
+      font-weight: 700;
+      text-transform: uppercase;
+    }
+
+    .headline::before {
+      content: "";
+      width: 28px;
+      height: 3px;
+      border-radius: 999px;
+      background: var(--gold);
+    }
+
+    .visual {
+      display: grid;
+      gap: 10px;
+      padding: 18px;
+      border: 1px solid rgba(20, 104, 77, .16);
+      border-radius: 8px;
+      background: rgba(255, 255, 255, .72);
+      box-shadow: 0 10px 28px rgba(24, 36, 28, .08);
+    }
+
+    .awning {
+      display: grid;
+      grid-template-columns: repeat(7, 1fr);
+      height: 34px;
+      overflow: hidden;
+      border: 1px solid rgba(20, 104, 77, .16);
+      border-radius: 8px 8px 3px 3px;
+    }
+
+    .awning span:nth-child(odd) { background: var(--accent); }
+    .awning span:nth-child(even) { background: #f9fbf5; }
+
+    .shelves {
+      display: grid;
+      gap: 7px;
+      padding: 12px;
+      border: 1px solid rgba(20, 104, 77, .14);
+      border-radius: 4px;
+      background: #fff;
+    }
+
+    .shelf {
+      display: grid;
+      grid-template-columns: 1.1fr .7fr 1.4fr .9fr;
+      gap: 6px;
+      height: 12px;
+    }
+
+    .shelf span {
+      border-radius: 3px;
+      background: #dfe8df;
+    }
+
+    .shelf span:nth-child(2) { background: #e7c878; }
+    .shelf span:nth-child(3) { background: #88b6a3; }
     }
 
     .meter {
@@ -276,6 +353,36 @@ app.get('/', (req, res) => {
     }
 
     main { padding: 22px 0 42px; }
+
+    .summary {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .summary-card {
+      min-height: 76px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, .03);
+    }
+
+    .summary-card span {
+      display: block;
+      color: var(--muted);
+      font-size: 12px;
+      text-transform: uppercase;
+    }
+
+    .summary-card strong {
+      display: block;
+      margin-top: 7px;
+      font-size: 24px;
+      color: var(--ink);
+    }
 
     .toolbar {
       display: flex;
@@ -332,11 +439,12 @@ app.get('/', (req, res) => {
 
     .status {
       margin-bottom: 12px;
-      padding: 12px 14px;
+      padding: 10px 12px;
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: var(--surface);
+      background: rgba(255, 255, 255, .7);
       color: var(--muted);
+      font-size: 13px;
       line-height: 1.45;
     }
 
@@ -357,11 +465,21 @@ app.get('/', (req, res) => {
       gap: 12px;
       align-items: start;
       min-height: 64px;
-      padding: 14px;
+      padding: 16px;
       border: 1px solid var(--line);
       border-radius: 8px;
       background: var(--surface);
-      box-shadow: 0 1px 2px rgba(0, 0, 0, .03);
+      box-shadow: 0 4px 14px rgba(24, 36, 28, .05);
+    }
+
+    .item::before {
+      content: "";
+      grid-column: 1 / -1;
+      height: 3px;
+      margin: -16px -16px 0;
+      border-radius: 8px 8px 0 0;
+      background: linear-gradient(90deg, var(--accent), var(--gold));
+      opacity: .22;
     }
 
     .item.hidden { display: none; }
@@ -382,6 +500,10 @@ app.get('/', (req, res) => {
     .item.done .title {
       color: var(--muted);
       text-decoration: line-through;
+    }
+
+    .item.done::before {
+      opacity: .65;
     }
 
     .meta {
@@ -424,7 +546,7 @@ app.get('/', (req, res) => {
     }
 
     @media (max-width: 760px) {
-      .top, .item {
+      .top, .item, .summary {
         grid-template-columns: 1fr;
       }
 
@@ -433,7 +555,7 @@ app.get('/', (req, res) => {
         text-align: left;
       }
 
-      .group, .toolbar button, .toolbar input {
+      .group, .toolbar button {
         width: 100%;
       }
     }
@@ -443,8 +565,16 @@ app.get('/', (req, res) => {
   <header>
     <div class="wrap top">
       <div>
-        <h1>Opening Checklist</h1>
-        <div class="sub">Connected to Google Sheets as the editable raw data source.</div>
+        <div class="headline">Operations Board</div>
+        <h1>Store Opening Checklist</h1>
+      </div>
+      <div class="visual" aria-hidden="true">
+        <div class="awning"><span></span><span></span><span></span><span></span><span></span><span></span><span></span></div>
+        <div class="shelves">
+          <div class="shelf"><span></span><span></span><span></span><span></span></div>
+          <div class="shelf"><span></span><span></span><span></span><span></span></div>
+          <div class="shelf"><span></span><span></span><span></span><span></span></div>
+        </div>
       </div>
       <div class="meter">
         <strong id="percent">0%</strong>
@@ -455,6 +585,11 @@ app.get('/', (req, res) => {
   </header>
 
   <main class="wrap">
+    <section class="summary" aria-label="Checklist summary">
+      <div class="summary-card"><span>Active Sheet</span><strong id="activeSheet">Checklist</strong></div>
+      <div class="summary-card"><span>Open Tasks</span><strong id="openTasks">0</strong></div>
+      <div class="summary-card"><span>Done Tasks</span><strong id="doneTasks">0</strong></div>
+    </section>
     <div id="status" class="status">Loading checklist...</div>
     <div class="toolbar">
       <div class="group">
@@ -466,9 +601,7 @@ app.get('/', (req, res) => {
         <button data-filter="done" type="button">Done</button>
       </div>
       <div class="group">
-        <input id="name" placeholder="Your name">
         <button id="refresh" class="primary" type="button">Refresh</button>
-        <button id="seed" type="button">Seed Sheet</button>
       </div>
     </div>
     <section id="list" class="list" aria-label="Checklist"></section>
@@ -483,15 +616,14 @@ app.get('/', (req, res) => {
     const count = document.getElementById('count');
     const bar = document.getElementById('bar');
     const toast = document.getElementById('toast');
-    const nameInput = document.getElementById('name');
     const sheetTabs = document.getElementById('sheetTabs');
+    const activeSheet = document.getElementById('activeSheet');
+    const openTasks = document.getElementById('openTasks');
+    const doneTasks = document.getElementById('doneTasks');
     let items = [];
     let filter = 'all';
     let sheetNames = [];
-    let currentSheet = localStorage.getItem('checklist-current-sheet') || '';
-
-    nameInput.value = localStorage.getItem('checklist-user-name') || '';
-    nameInput.addEventListener('input', () => localStorage.setItem('checklist-user-name', nameInput.value));
+    let currentSheet = new URLSearchParams(window.location.search).get('sheet') || '';
 
     function showToast(message) {
       toast.textContent = message;
@@ -524,7 +656,9 @@ app.get('/', (req, res) => {
         button.className = sheetName === currentSheet ? 'active' : '';
         button.addEventListener('click', () => {
           currentSheet = sheetName;
-          localStorage.setItem('checklist-current-sheet', currentSheet);
+          const url = new URL(window.location.href);
+          url.searchParams.set('sheet', currentSheet);
+          window.history.replaceState({}, '', url);
           renderSheetTabs();
           loadItems();
         });
@@ -535,11 +669,15 @@ app.get('/', (req, res) => {
     function updateProgress() {
       const total = items.length;
       const done = items.filter((item) => item.done).length;
+      const open = total - done;
       const value = total ? Math.round((done / total) * 100) : 0;
       percent.textContent = value + '%';
       count.textContent = done + ' of ' + total + ' completed';
+      activeSheet.textContent = currentSheet || 'Checklist';
+      openTasks.textContent = open;
+      doneTasks.textContent = done;
       bar.style.width = value + '%';
-      document.title = value + '% - Opening Checklist';
+      document.title = value + '% - Store Opening Checklist';
     }
 
     function render() {
@@ -563,7 +701,7 @@ app.get('/', (req, res) => {
               body: JSON.stringify({
                 done: item.done,
                 notes: item.notes,
-                updatedBy: nameInput.value.trim()
+                updatedBy: 'Checklist App'
               })
             });
             await loadItems(false);
@@ -592,7 +730,7 @@ app.get('/', (req, res) => {
               body: JSON.stringify({
                 done: item.done,
                 notes: item.notes,
-                updatedBy: nameInput.value.trim()
+                updatedBy: 'Checklist App'
               })
             });
             await loadItems(false);
@@ -618,24 +756,16 @@ app.get('/', (req, res) => {
     async function loadItems(showMessage = true) {
       try {
         const config = await api('/api/config');
-        if (!config.connected) {
-          statusBox.className = 'status warn';
-          statusBox.textContent = 'Google Sheets is not connected yet. Add GOOGLE_SHEET_ID, GOOGLE_SERVICE_ACCOUNT_EMAIL, and GOOGLE_PRIVATE_KEY in Railway variables. Share the Google Sheet with the service account email.';
-          count.textContent = 'Not connected';
-          return;
-        }
-
         sheetNames = config.sheetNames || [config.defaultSheetName || 'Checklist'];
         if (!sheetNames.includes(currentSheet)) currentSheet = config.defaultSheetName || sheetNames[0];
-        localStorage.setItem('checklist-current-sheet', currentSheet);
         renderSheetTabs();
 
         const data = await api('/api/items' + sheetQuery());
         items = data.items;
         statusBox.className = 'status';
         statusBox.textContent = items.length
-          ? 'Live sheet loaded from ' + currentSheet + '. Edit task names, add rows, or change raw values directly in Google Sheets.'
-          : 'Connected to ' + currentSheet + ', but no rows found. Click Seed Sheet to add the default checklist.';
+          ? currentSheet + ' loaded. Changes in Google Sheets appear here automatically.'
+          : 'No rows found in ' + currentSheet + '. Add tasks directly in Google Sheets.';
         render();
         if (showMessage) showToast('Loaded from Google Sheets.');
       } catch (error) {
@@ -654,16 +784,6 @@ app.get('/', (req, res) => {
     });
 
     document.getElementById('refresh').addEventListener('click', () => loadItems());
-    document.getElementById('seed').addEventListener('click', async () => {
-      if (!confirm('Replace A1:F with the default checklist rows?')) return;
-      try {
-        await api('/api/seed' + sheetQuery(), { method: 'POST' });
-        await loadItems(false);
-        showToast('Sheet seeded.');
-      } catch (error) {
-        showToast(error.message);
-      }
-    });
 
     loadItems(false);
     setInterval(() => loadItems(false), 15000);
@@ -680,5 +800,5 @@ app.use((error, req, res, next) => {
 });
 
 app.listen(port, () => {
-  console.log(`Opening checklist running on port ${port}`);
+  console.log(`Store opening checklist running on port ${port}`);
 });
