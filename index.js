@@ -1,891 +1,684 @@
 const express = require('express');
-const fs = require('fs');
-const path = require('path');
+const { google } = require('googleapis');
 
 const app = express();
-const PORT = process.env.PORT || 3000;
-const DATA_FILE = process.env.DATA_FILE || path.join(__dirname, 'data.json');
-const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || 'carl@17';
+const port = process.env.PORT || 3000;
 
-app.use(express.json({ limit: '5mb' }));
+const SHEET_ID = parseSheetId(process.env.GOOGLE_SHEET_ID || 'https://docs.google.com/spreadsheets/d/1rBtctlB8jrvggwzUt2dQ8Jz_Vs7VOWimPXpIIyYmnkM/edit?gid=0#gid=0');
+const SHEET_NAMES = (process.env.SHEET_NAMES || process.env.SHEET_NAME || 'Checklist,WorkPlan')
+  .split(',')
+  .map((name) => name.trim())
+  .filter(Boolean);
+const DEFAULT_SHEET_NAME = SHEET_NAMES[0] || 'Checklist';
+const SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '';
+const PRIVATE_KEY = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
 
-const SEED_DATA = {
-  lists: [
-    {
-      id: 'congressional',
-      name: 'Congressional - June 22 Pre-Opening Checklist',
-      items: [
-        { id: 'i1',  text: 'Recorida starting today (vehicle with speaker)', pic: '', completed: false, remarks: '' },
-        { id: 'i2',  text: 'Audio jack for Customer Service PC to connect to Paging system amplifier', pic: '', completed: false, remarks: '' },
-        { id: 'i3',  text: 'Music for Customer Service PC must be installed/saved today', pic: 'Chari', completed: false, remarks: '' },
-        { id: 'i4',  text: 'USB extension for POS scanner — scanner must be placed inside the scanner enclosure', pic: '', completed: false, remarks: '' },
-        { id: 'i5',  text: 'High value cage for Wines / Liquor and Canned meat', pic: 'Sheil / Earl', completed: false, remarks: '' },
-        { id: 'i6',  text: 'Entrance door mat', pic: 'Chari', completed: false, remarks: '' },
-        { id: 'i7',  text: 'Ice for meat show case — must be ready today', pic: 'Sheila', completed: false, remarks: '' },
-        { id: 'i8',  text: 'Refill water tank by 4e', pic: 'Sheila to monitor', completed: false, remarks: '' },
-        { id: 'i9',  text: 'Prepare complete list of manpower (including back up from other stores) and work plan for tomorrow with schedule', pic: 'Sheila', completed: false, remarks: '' },
-        { id: 'i10', text: 'VIP invitees confirmation', pic: 'Chari / Ron', completed: false, remarks: '' },
-        { id: 'i11', text: 'Priest confirmation — what time will arrive? Mass start at 7am', pic: 'Chari / Ron', completed: false, remarks: '' },
-        { id: 'i12', text: 'Final cleaning of Parking Area tonight with pressure washer', pic: 'Chari', completed: false, remarks: '' },
-        { id: 'i13', text: 'Parking area must be clean and organized — remove scrap/materials from contractor until 1pm', pic: 'Chari', completed: false, remarks: '' },
-        { id: 'i14', text: 'Final cleaning of checkout counter — stainless part must be shiny and no stain', pic: 'Ecilda', completed: false, remarks: '' },
-        { id: 'i15', text: 'Trade test schedule of POS today', pic: 'Ecilda', completed: false, remarks: '' },
-        { id: 'i16', text: 'Set up deadline at 5pm for all department (except fresh) for thorough cleaning of the store', pic: 'Sheila to monitor', completed: false, remarks: '' },
-        { id: 'i17', text: 'Prepare tables and chairs this evening for mass tomorrow morning', pic: 'Chari', completed: false, remarks: '' },
-        { id: 'i18', text: 'Check red light in checkout counter if functioning including the counter number', pic: 'Ecilda', completed: false, remarks: '' },
-        { id: 'i19', text: 'Prepare checkout supplies (POS journal/thermal, packaging tape tan, plastic twin, plastic bags, eco bag, etc.) — borrow from other store today if lacking', pic: 'Sheila', completed: false, remarks: '' },
-        { id: 'i20', text: 'Motorcade personnel to finalize today based on budget, start of motorcade 7am', pic: '', completed: false, remarks: '' },
-        { id: 'i21', text: 'Prepare candles with handle or cover for tomorrow blessings — assess quantity', pic: 'Ron', completed: false, remarks: '' },
-        { id: 'i22', text: 'Prepare food for VIP tomorrow based on budget, assign supervisor to distribute (VIP/Visitors only)', pic: '', completed: false, remarks: '' },
-        { id: 'i23', text: 'Make sure Display and Shelftag already at 100% fillrate', pic: 'Joem', completed: false, remarks: '' },
-        { id: 'i24', text: 'Finalize preparation of Promo items today — mechanics/signages must be printed and posted. Ensure proper dissemination especially at checkout', pic: 'Joem', completed: false, remarks: '' },
-        { id: 'i25', text: 'Prepare Ribbon cutting materials today, 10pcs scissors required', pic: 'Ron', completed: false, remarks: '' },
-        { id: 'i26', text: 'Flowers to ensure delivery early in the morning (6am if possible or earlier) before the mass', pic: 'Ron', completed: false, remarks: '' },
-        { id: 'i27', text: 'Sound system to deliver and set up tonight or early morning tomorrow before the mass', pic: 'Ron', completed: false, remarks: '' },
-        { id: 'i28', text: 'Check tarpaulin/topload for tricycle if already installed', pic: 'Sheila', completed: false, remarks: '' },
-        { id: 'i29', text: 'Air dancer (2 units) must be picked up/delivered today from Valenzuela and installed tomorrow morning, both sides in front', pic: 'Joem', completed: false, remarks: '' }
-      ]
-    }
-  ],
-  workPlan: {
-    items: [
-      { id: 'w1',  time: '5:00 AM', title: 'Store clearing', details: [] },
-      { id: 'w2',  time: '5:30 AM', title: 'Alay time', details: ['All employees must enter the store at 5:30 AM right after the Alay'] },
-      { id: 'w3',  time: '',        title: 'Hang the ampao for the Dragon Dance', details: ['Must be done before the mass'] },
-      { id: 'w4',  time: '',        title: 'Prepare Flowers and Ribbon in front of the store', details: [] },
-      { id: 'w5',  time: '',        title: 'Managers / Supervisors / S.A. final department check', details: ['Verify display fill rate', 'Check shelf tags are complete and correct'] },
-      { id: 'w6',  time: '6:00 AM', title: 'Cashiers proceed to TRS for cash box / change fund', details: ['TRS Staff must be available at 6:00 AM sharp'] },
-      { id: 'w7',  time: '',        title: 'Cashiers prepare change fund inside POS cash drawer at their lane', details: [] },
-      { id: 'w8',  time: '',        title: 'During mass — cashiers remain at their lane (cash drawer closed)', details: [] },
-      { id: 'w9',  time: '',        title: 'Before blessing — Checkout Supervisor opens the cash drawer', details: ['Required for the blessing'] },
-      { id: 'w10', time: '6:00 AM', title: 'Mass Starts', details: ['Brief Priest on the program beforehand', 'A short program follows the mass'] },
-      { id: 'w11', time: '',        title: 'Keep the program short — store must open before 8:00 AM', details: ['Area Manager delivers the speech and acknowledges VIP visitors', 'Confirm with VIP / Gov. Officials in advance if they will give a speech (after the Area Manager)'] },
-      { id: 'w12', time: '',        title: 'Assign personnel to assist the Priest during store blessing', details: ['Plan the blessing route ahead of time', 'Route must cover: back office, selling area, checkout, receiving, warehouse', 'Cash drawers of cashiers must be open during blessing'] },
-      { id: 'w13', time: '',        title: 'Final blessing at the storefront (Flowers & Ribbon area)', details: ['Ribbon cutting participants must be present'] },
-      { id: 'w14', time: '',        title: 'Dragon Dance commences after the blessing', details: ['Cash drawers of cashiers must remain open'] },
-      { id: 'w15', time: '',        title: 'Food distribution to VIP begins', details: [] },
-      { id: 'w16', time: '',        title: 'Signal Customer Service to spiel the opening advisory', details: ['Triggered after the Dragon Dance', 'Script to be prepared in advance'] },
-      { id: 'w17', time: '',        title: 'SSD opens the entrance upon hearing the opening advisory', details: [] },
-      { id: 'w18', time: 'Before opening', title: 'Final check — all manpower on their respective departments', details: [] }
-    ]
+const headers = ['id', 'task', 'done', 'notes', 'updated_by', 'updated_at'];
+const starterTasks = [
+  ['pick-up-pushcart', 'Pick up pushcart, Trolly and basket', 'FALSE', '', '', ''],
+  ['others-pick-up', 'Others for pick up (supplies and fixed assets)', 'FALSE', '', '', ''],
+  ['water-connection', 'Water connection', 'FALSE', '', '', ''],
+  ['high-value-showcase', 'High value show case for wines and liquor and canned goods', 'FALSE', '', '', ''],
+  ['promo-gondola', 'Promo items gondola lacking 1', 'FALSE', '', '', ''],
+  ['weighing-scale', 'Weighing scale', 'FALSE', '', '', ''],
+  ['small-island-freezer', 'Patungan island freezer the small one', 'FALSE', '', '', ''],
+  ['tnap-booth', 'TNAP booth', 'FALSE', '', '', ''],
+  ['manager-workstation', 'Work station set up for Managers and Supervisors', 'FALSE', '', '', ''],
+  ['fillrate', '100% Fillrate for Display and shelftag (we are behind 2 days already)', 'FALSE', '', '', ''],
+  ['rfp-business-permit', 'Ron follow up RFP for business permit (already coordinated to Maam Emy yesterday)', 'FALSE', '', '', ''],
+  ['borrow-opening-support', 'Borrow pushcart, Trolly and Basket to other stores for opening support (Chari, Sheila assess how many)', 'FALSE', '', '', ''],
+  ['opening-budget', 'Follow up opening budget to Baby Grace Valido', 'FALSE', '', '', ''],
+  ['checkout-refurbish', 'Checkout counter to finish refurbish tomorrow (No extension), POS to set up after. (Sheila monitor this)', 'FALSE', '', '', ''],
+  ['scan-items', 'Once POS already set up, start scanning of items (all items must be scanned)', 'FALSE', '', '', ''],
+  ['island-freezers-operational', 'Island freezers must be operational starting today - pick up lacking island freezers in Valenzuela', 'FALSE', '', '', ''],
+  ['vip-priest', 'Ron to provide final list of VIP to invite in store opening. Find Priest also for Mass', 'FALSE', '', '', ''],
+  ['store-cleaning', 'Continuous cleaning of store interior / exterior', 'FALSE', '', '', ''],
+  ['parking-pressure-washer', 'Parking Area - clean with pressure washer', 'FALSE', '', '', ''],
+  ['lamp-post-banners', 'After payment of business permit, creative team to start installation of lamp post banners with wood frame. Make sure LGU approval was already done. Creative team c/o Emil must prepare today the number of lamp post banners to install.', 'FALSE', '', '', ''],
+  ['checkout-chain', 'Make sure Checkout counter must have chain', 'FALSE', '', '', ''],
+  ['wine-liquor-showcase-deadline', 'Deadline for Wines and Liquor, Canned Meat high value glass showcase will be on Friday. Coordinate to Marifel for RS alignment', 'FALSE', '', '', ''],
+  ['fresh-items-delivery', 'Delivery of Fresh items must be ongoing by now', 'FALSE', '', '', ''],
+  ['backup-manpower', 'Prepare list of back up manpower', 'FALSE', '', '', ''],
+  ['backup-cashiers-baggers', 'Cashiers and baggers', 'FALSE', '', '', ''],
+  ['backup-sales-assistant', 'Sales Assistant', 'FALSE', '', '', ''],
+  ['backup-supervisors', 'Supervisors', 'FALSE', '', '', ''],
+  ['hbc-acrylic-fence', 'Acrylic fence at HBC', 'FALSE', '', '', '']
+];
+
+app.use(express.json({ limit: '1mb' }));
+
+function parseSheetId(value) {
+  const trimmed = String(value || '').trim();
+  const match = trimmed.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+  return match ? match[1] : trimmed;
+}
+
+function hasGoogleConfig() {
+  return Boolean(SHEET_ID && SERVICE_ACCOUNT_EMAIL && PRIVATE_KEY);
+}
+
+function sheetsClient() {
+  if (!hasGoogleConfig()) {
+    const missing = ['GOOGLE_SHEET_ID', 'GOOGLE_SERVICE_ACCOUNT_EMAIL', 'GOOGLE_PRIVATE_KEY']
+      .filter((key) => !process.env[key]);
+    const error = new Error(`Missing Google Sheets config: ${missing.join(', ')}`);
+    error.statusCode = 500;
+    throw error;
   }
-};
 
-let data;
+  const auth = new google.auth.JWT({
+    email: SERVICE_ACCOUNT_EMAIL,
+    key: PRIVATE_KEY,
+    scopes: ['https://www.googleapis.com/auth/spreadsheets']
+  });
 
-function loadData() {
+  return google.sheets({ version: 'v4', auth });
+}
+
+function selectedSheetName(req) {
+  const requested = String(req.query.sheet || req.body?.sheet || DEFAULT_SHEET_NAME).trim();
+  if (SHEET_NAMES.includes(requested)) return requested;
+
+  const error = new Error(`Sheet tab is not allowed. Use one of: ${SHEET_NAMES.join(', ')}`);
+  error.statusCode = 400;
+  throw error;
+}
+
+function isDone(value) {
+  return ['true', 'yes', 'y', '1', 'done', 'complete', 'completed'].includes(String(value || '').trim().toLowerCase());
+}
+
+function rowToItem(row, index) {
+  return {
+    rowNumber: index + 2,
+    id: row[0] || `row-${index + 2}`,
+    task: row[1] || '',
+    done: isDone(row[2]),
+    notes: row[3] || '',
+    updatedBy: row[4] || '',
+    updatedAt: row[5] || ''
+  };
+}
+
+async function readItems(sheetName) {
+  const sheets = sheetsClient();
+  const response = await sheets.spreadsheets.values.get({
+    spreadsheetId: SHEET_ID,
+    range: `'${sheetName}'!A2:F`
+  });
+
+  return (response.data.values || [])
+    .map(rowToItem)
+    .filter((item) => item.task.trim());
+}
+
+async function findItemRow(sheetName, id) {
+  const items = await readItems(sheetName);
+  const item = items.find((entry) => entry.id === id);
+  if (!item) {
+    const error = new Error('Task not found in Google Sheet.');
+    error.statusCode = 404;
+    throw error;
+  }
+  return item;
+}
+
+app.get('/api/config', (req, res) => {
+  res.json({
+    connected: hasGoogleConfig(),
+    sheetNames: SHEET_NAMES,
+    defaultSheetName: DEFAULT_SHEET_NAME,
+    missing: ['GOOGLE_SHEET_ID', 'GOOGLE_SERVICE_ACCOUNT_EMAIL', 'GOOGLE_PRIVATE_KEY'].filter((key) => !process.env[key])
+  });
+});
+
+app.get('/api/items', async (req, res, next) => {
   try {
-    if (fs.existsSync(DATA_FILE)) {
-      data = JSON.parse(fs.readFileSync(DATA_FILE, 'utf-8'));
-      // Migration: ensure workPlan exists for older data files
-      if (!data.workPlan || !Array.isArray(data.workPlan.items)) {
-        data.workPlan = SEED_DATA.workPlan;
-        saveData();
-      }
-      return;
-    }
-  } catch (e) {
-    console.error('Load error:', e.message);
+    const sheetName = selectedSheetName(req);
+    res.json({ sheetName, items: await readItems(sheetName) });
+  } catch (error) {
+    next(error);
   }
-  data = SEED_DATA;
-  saveData();
-}
+});
 
-function saveData() {
+app.post('/api/items/:id', async (req, res, next) => {
   try {
-    fs.writeFileSync(DATA_FILE, JSON.stringify(data, null, 2));
-  } catch (e) {
-    console.error('Save error:', e.message);
-  }
-}
+    const sheetName = selectedSheetName(req);
+    const { done, notes, updatedBy } = req.body;
+    const item = await findItemRow(sheetName, req.params.id);
+    const updatedAt = new Date().toISOString();
+    const sheets = sheetsClient();
 
-loadData();
-
-// Auth middleware — admin password required
-function requireAuth(req, res, next) {
-  var pass = req.headers['x-admin-pass'];
-  if (pass !== ADMIN_PASSWORD) {
-    return res.status(401).json({ error: 'Invalid password' });
-  }
-  next();
-}
-
-// API
-app.get('/api/data', (req, res) => res.json(data));
-
-// Verify password (used by client to validate before storing in sessionStorage)
-app.post('/api/verify', (req, res) => {
-  if ((req.body && req.body.password) === ADMIN_PASSWORD) return res.json({ ok: true });
-  return res.status(401).json({ error: 'Invalid password' });
-});
-
-// PROTECTED: full data save (add/edit/delete items, list management, work plan)
-app.post('/api/data', requireAuth, (req, res) => {
-  if (!req.body || !Array.isArray(req.body.lists)) {
-    return res.status(400).json({ error: 'Invalid payload' });
-  }
-  data.lists = req.body.lists;
-  if (req.body.workPlan && Array.isArray(req.body.workPlan.items)) {
-    data.workPlan = req.body.workPlan;
-  }
-  saveData();
-  res.json({ ok: true });
-});
-
-// OPEN: toggle completed (anyone on the team can mark progress)
-app.post('/api/check', (req, res) => {
-  var listId = req.body && req.body.listId;
-  var itemId = req.body && req.body.itemId;
-  var completed = !!(req.body && req.body.completed);
-  var list = data.lists.find(function(l) { return l.id === listId; });
-  if (!list) return res.status(404).json({ error: 'List not found' });
-  var item = list.items.find(function(i) { return i.id === itemId; });
-  if (!item) return res.status(404).json({ error: 'Item not found' });
-  item.completed = completed;
-  saveData();
-  res.json({ ok: true });
-});
-
-// OPEN: update remarks (anyone can add update notes)
-app.post('/api/remarks', (req, res) => {
-  var listId = req.body && req.body.listId;
-  var itemId = req.body && req.body.itemId;
-  var remarks = (req.body && req.body.remarks) || '';
-  var list = data.lists.find(function(l) { return l.id === listId; });
-  if (!list) return res.status(404).json({ error: 'List not found' });
-  var item = list.items.find(function(i) { return i.id === itemId; });
-  if (!item) return res.status(404).json({ error: 'Item not found' });
-  item.remarks = String(remarks).slice(0, 2000);
-  saveData();
-  res.json({ ok: true });
-});
-
-const HTML = `<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width,initial-scale=1">
-<title>Store Opening Checklist</title>
-<style>
-  * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f4f5f7; color: #222; padding-bottom: 40px; }
-  .topbar { background: #1B5E20; color: #fff; padding: 14px 18px; display: flex; justify-content: space-between; align-items: center; box-shadow: 0 2px 4px rgba(0,0,0,0.1); }
-  .topbar h1 { font-size: 17px; font-weight: 600; }
-  .topbar .right { display: flex; gap: 10px; align-items: center; }
-  .topbar .by { font-size: 11px; opacity: 0.9; }
-  .topbar .lock { background: rgba(255,255,255,0.15); border: 1px solid rgba(255,255,255,0.3); color: #fff; font-size: 11px; padding: 5px 10px; border-radius: 14px; cursor: pointer; font-weight: 600; }
-  .topbar .lock.unlocked { background: #c8e6c9; color: #1B5E20; border-color: #c8e6c9; }
-  .container { max-width: 900px; margin: 0 auto; padding: 14px; }
-  .primaryTabs { display: flex; gap: 8px; margin-bottom: 12px; background: #fff; padding: 6px; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-  .pTab { flex: 1; padding: 12px 8px; border: none; background: transparent; cursor: pointer; font-size: 14px; font-weight: 700; color: #555; border-radius: 8px; transition: all 0.2s; font-family: inherit; }
-  .pTab:hover { background: #f5f5f5; }
-  .pTab.active { background: #1B5E20; color: #fff; box-shadow: 0 2px 6px rgba(27,94,32,0.3); }
-  .listSelector { background: #fff; padding: 10px 12px; border-radius: 8px; margin-bottom: 10px; display: flex; gap: 8px; align-items: center; }
-  .listSelector label { font-size: 12px; color: #555; font-weight: 600; }
-  .listSelector select { flex: 1; padding: 8px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; background: #fff; }
-  .progress { background: #fff; padding: 12px; border-radius: 8px; margin-bottom: 10px; }
-  .progress .label { font-size: 12px; color: #555; margin-bottom: 6px; display: flex; justify-content: space-between; }
-  .progress .label .pct { color: #1B5E20; font-weight: bold; }
-  .progress .bar { background: #e0e0e0; border-radius: 6px; height: 10px; overflow: hidden; }
-  .progress .fill { background: linear-gradient(90deg, #1B5E20, #2E7D32); height: 100%; transition: width 0.3s; }
-  .tabs { display: flex; background: #fff; border-radius: 8px; overflow: hidden; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); }
-  .tab { flex: 1; padding: 12px 6px; text-align: center; cursor: pointer; font-size: 12px; font-weight: 600; border-bottom: 3px solid transparent; color: #555; user-select: none; }
-  .tab.active { color: #1B5E20; border-bottom-color: #1B5E20; background: #f0f9f0; }
-  .tab .count { font-size: 11px; background: #ddd; color: #444; padding: 1px 6px; border-radius: 8px; margin-left: 4px; }
-  .tab.active .count { background: #1B5E20; color: #fff; }
-  .item { background: #fff; border-radius: 8px; padding: 12px; margin-bottom: 8px; box-shadow: 0 1px 2px rgba(0,0,0,0.06); border-left: 4px solid #1B5E20; }
-  .item.done { opacity: 0.7; background: #fafafa; border-left-color: #aaa; }
-  .item .row { display: flex; gap: 10px; align-items: flex-start; }
-  .item .check { width: 22px; height: 22px; flex-shrink: 0; cursor: pointer; accent-color: #1B5E20; margin-top: 2px; }
-  .item .body { flex: 1; min-width: 0; }
-  .item .text { font-size: 14px; line-height: 1.45; word-wrap: break-word; }
-  .item.done .text { text-decoration: line-through; color: #777; }
-  .item .pic { display: inline-block; background: #1B5E20; color: #fff; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 10px; margin-top: 6px; }
-  .item .pic.empty { background: #bbb; }
-  .item .actions { display: flex; gap: 2px; flex-shrink: 0; }
-  .item .actions button { background: none; border: none; cursor: pointer; padding: 4px 6px; font-size: 15px; color: #666; border-radius: 4px; }
-  .item .actions button:hover { background: #f0f0f0; }
-  .item .remarks { margin-top: 10px; }
-  .item .remarks textarea { width: 100%; padding: 8px; border: 1px solid #ddd; border-radius: 6px; font-size: 13px; resize: vertical; min-height: 38px; font-family: inherit; }
-  .item .remarks textarea:focus { border-color: #1B5E20; outline: none; }
-  .addItem { background: #fff; border-radius: 8px; padding: 14px; margin-top: 14px; border: 2px dashed #1B5E20; }
-  .addItem h3 { font-size: 13px; color: #1B5E20; margin-bottom: 8px; font-weight: 700; }
-  .addItem .hint { font-size: 11px; color: #888; margin-bottom: 8px; line-height: 1.4; }
-  .addItem input { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; margin-bottom: 8px; }
-  .addItem input:focus { border-color: #1B5E20; outline: none; }
-  .addItem button { background: #1B5E20; color: #fff; border: none; padding: 9px 18px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
-  .addItem button:hover { background: #154a18; }
-  .manage { background: #fff; border-radius: 8px; padding: 16px; }
-  .manage h3 { font-size: 15px; color: #1B5E20; margin-bottom: 12px; }
-  .manage .listRow { display: flex; gap: 8px; align-items: center; padding: 10px; border: 1px solid #eee; border-radius: 6px; margin-bottom: 6px; flex-wrap: wrap; }
-  .manage .listRow .name { flex: 1; font-size: 14px; min-width: 150px; }
-  .manage .listRow .name .count { color: #888; font-size: 12px; }
-  .manage .listRow.active { background: #f0f9f0; border-color: #1B5E20; }
-  .manage .listRow .activeTag { color: #1B5E20; font-size: 11px; font-weight: bold; background: #c8e6c9; padding: 3px 8px; border-radius: 4px; }
-  .manage .listRow button { background: #fff; border: 1px solid #ddd; padding: 6px 10px; border-radius: 4px; cursor: pointer; font-size: 12px; }
-  .manage .listRow button.primary { background: #1B5E20; color: #fff; border-color: #1B5E20; }
-  .manage .listRow button.danger { color: #c62828; border-color: #ffcdd2; }
-  .manage .addList { display: flex; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid #eee; }
-  .manage .addList input { flex: 1; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
-  .manage .addList button { background: #1B5E20; color: #fff; border: none; padding: 10px 16px; border-radius: 6px; cursor: pointer; font-weight: 600; }
-  .empty { text-align: center; padding: 50px 20px; color: #888; font-size: 14px; background: #fff; border-radius: 8px; }
-  .modal { position: fixed; inset: 0; background: rgba(0,0,0,0.5); display: none; align-items: center; justify-content: center; z-index: 100; padding: 16px; }
-  .modal.show { display: flex; }
-  .modal .card { background: #fff; border-radius: 10px; padding: 20px; width: 100%; max-width: 480px; }
-  .modal h3 { font-size: 16px; color: #1B5E20; margin-bottom: 12px; }
-  .modal label { display: block; font-size: 12px; color: #555; margin-bottom: 4px; margin-top: 10px; font-weight: 600; }
-  .modal input, .modal textarea { width: 100%; padding: 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; font-family: inherit; }
-  .modal input:focus, .modal textarea:focus { border-color: #1B5E20; outline: none; }
-  .modal textarea { min-height: 60px; resize: vertical; }
-  .modal .actions { display: flex; gap: 8px; justify-content: flex-end; margin-top: 16px; }
-  .modal .actions button { padding: 10px 16px; border-radius: 6px; border: none; cursor: pointer; font-size: 14px; font-weight: 600; }
-  .modal .actions .cancel { background: #eee; color: #333; }
-  .modal .actions .save { background: #1B5E20; color: #fff; }
-  .saveStatus { position: fixed; bottom: 20px; right: 20px; background: #1B5E20; color: #fff; padding: 8px 14px; border-radius: 6px; font-size: 12px; opacity: 0; transition: opacity 0.3s; pointer-events: none; }
-  .saveStatus.show { opacity: 1; }
-
-  /* === Work Plan / Timeline === */
-  .wpHeader { background: linear-gradient(135deg, #1B5E20, #2E7D32); color: #fff; border-radius: 10px; padding: 18px 20px; margin-bottom: 14px; }
-  .wpHeader h2 { font-size: 18px; font-weight: 700; margin-bottom: 4px; display: flex; align-items: center; gap: 8px; }
-  .wpHeader p { font-size: 12px; opacity: 0.9; }
-  .timeline { position: relative; padding-left: 36px; }
-  .timeline::before { content: ''; position: absolute; left: 14px; top: 8px; bottom: 8px; width: 2px; background: #1B5E20; opacity: 0.25; }
-  .step { position: relative; background: #fff; border-radius: 10px; padding: 14px 14px 14px 18px; margin-bottom: 12px; box-shadow: 0 1px 3px rgba(0,0,0,0.08); border-left: 4px solid #1B5E20; }
-  .step .dot { position: absolute; left: -30px; top: 14px; width: 28px; height: 28px; border-radius: 50%; background: #1B5E20; color: #fff; font-size: 12px; font-weight: 700; display: flex; align-items: center; justify-content: center; box-shadow: 0 0 0 3px #fff, 0 0 0 4px #1B5E20; }
-  .step .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 10px; margin-bottom: 6px; }
-  .step .title { flex: 1; font-size: 14px; font-weight: 600; line-height: 1.4; color: #222; word-wrap: break-word; }
-  .step .time { background: #FFB300; color: #4E342E; font-size: 11px; font-weight: 700; padding: 3px 8px; border-radius: 10px; white-space: nowrap; flex-shrink: 0; }
-  .step .stepActions { display: flex; gap: 2px; flex-shrink: 0; }
-  .step .stepActions button { background: none; border: none; cursor: pointer; padding: 4px 6px; font-size: 14px; color: #666; border-radius: 4px; }
-  .step .stepActions button:hover { background: #f0f0f0; }
-  .step .details { margin: 8px 0 0 4px; padding-left: 16px; }
-  .step .details li { font-size: 13px; color: #444; line-height: 1.5; margin-bottom: 3px; }
-  .addStep { background: #fff; border-radius: 10px; padding: 14px; margin-top: 14px; border: 2px dashed #1B5E20; text-align: center; }
-  .addStep button { background: #1B5E20; color: #fff; border: none; padding: 10px 22px; border-radius: 6px; font-size: 13px; font-weight: 600; cursor: pointer; }
-  .addStep button:hover { background: #154a18; }
-  .wpLegend { background: #fff; border-radius: 8px; padding: 10px 14px; margin-bottom: 12px; font-size: 12px; color: #555; display: flex; gap: 14px; flex-wrap: wrap; align-items: center; }
-  .wpLegend .item { display: flex; align-items: center; gap: 5px; }
-  .wpLegend .sw { width: 14px; height: 14px; border-radius: 50%; background: #1B5E20; }
-  .wpLegend .swT { background: #FFB300; height: 16px; border-radius: 8px; padding: 0 6px; color: #4E342E; font-size: 10px; font-weight: 700; display: flex; align-items: center; }
-  @media (max-width: 600px) {
-    .topbar h1 { font-size: 15px; }
-    .tab { font-size: 11px; padding: 10px 2px; }
-    .tab .count { font-size: 10px; padding: 1px 5px; }
-  }
-</style>
-</head>
-<body>
-
-<div class="topbar">
-  <h1>📋 Store Opening Checklist <span style="opacity:0.7;font-weight:400;">and</span> Work Plan</h1>
-  <div class="right">
-    <span class="by">By Carl_M@17</span>
-    <button class="lock" id="lockBtn" onclick="toggleLock()">🔒 Locked</button>
-  </div>
-</div>
-
-<div class="container">
-  <!-- Primary section tabs -->
-  <div class="primaryTabs">
-    <button class="pTab active" data-section="checklist">📋 Checklist</button>
-    <button class="pTab" data-section="workplan">🗓️ Work Plan</button>
-  </div>
-
-  <!-- Checklist-only header (hidden when Work Plan is active) -->
-  <div id="checklistHeader">
-    <div class="listSelector">
-      <label>List:</label>
-      <select id="listSelect"></select>
-    </div>
-
-    <div class="progress">
-      <div class="label">
-        <span id="progressLabel">0 / 0 completed</span>
-        <span class="pct" id="progressPct">0%</span>
-      </div>
-      <div class="bar"><div class="fill" id="progressFill" style="width:0%"></div></div>
-    </div>
-
-    <div class="tabs">
-      <div class="tab active" data-tab="all">All <span class="count" id="cAll">0</span></div>
-      <div class="tab" data-tab="pending">Pending <span class="count" id="cPending">0</span></div>
-      <div class="tab" data-tab="completed">Done <span class="count" id="cCompleted">0</span></div>
-      <div class="tab" data-tab="manage">Manage</div>
-    </div>
-  </div>
-
-  <div id="content"></div>
-</div>
-
-<div class="modal" id="editModal">
-  <div class="card">
-    <h3>Edit Item</h3>
-    <label>Task</label>
-    <textarea id="editText"></textarea>
-    <label>Person in Charge (PIC)</label>
-    <input id="editPic" type="text" placeholder="e.g. Chari">
-    <label>Remarks / Update</label>
-    <textarea id="editRemarks"></textarea>
-    <div class="actions">
-      <button class="cancel" onclick="closeModal()">Cancel</button>
-      <button class="save" onclick="saveEdit()">Save</button>
-    </div>
-  </div>
-</div>
-
-<div class="modal" id="wpModal">
-  <div class="card">
-    <h3 id="wpModalTitle">Edit Step</h3>
-    <label>Time (optional — e.g. 6:00 AM)</label>
-    <input id="wpTime" type="text" placeholder="Leave blank if no specific time">
-    <label>Step Title</label>
-    <textarea id="wpTitle" placeholder="Short description of the step"></textarea>
-    <label>Sub-details (one per line, optional)</label>
-    <textarea id="wpDetails" placeholder="Detail line 1&#10;Detail line 2" style="min-height:90px;"></textarea>
-    <div class="actions">
-      <button class="cancel" onclick="closeWpModal()">Cancel</button>
-      <button class="save" onclick="saveWpEdit()">Save</button>
-    </div>
-  </div>
-</div>
-
-<div class="saveStatus" id="saveStatus">Saved ✓</div>
-
-<script>
-var data = { lists: [] };
-var currentSection = 'checklist'; // 'checklist' | 'workplan'
-var currentTab = 'all';
-var editingItemId = null;
-var saveTimer = null;
-var activeListId = localStorage.getItem('activeListId') || null;
-
-// ===== Auth =====
-function getPass() { return sessionStorage.getItem('adminPass') || ''; }
-function setPass(p) { sessionStorage.setItem('adminPass', p); updateLockUI(); }
-function clearPass() { sessionStorage.removeItem('adminPass'); updateLockUI(); }
-function isUnlocked() { return !!getPass(); }
-
-function updateLockUI() {
-  var btn = document.getElementById('lockBtn');
-  if (!btn) return;
-  if (isUnlocked()) {
-    btn.textContent = '🔓 Unlocked';
-    btn.classList.add('unlocked');
-  } else {
-    btn.textContent = '🔒 Locked';
-    btn.classList.remove('unlocked');
-  }
-}
-
-function toggleLock() {
-  if (isUnlocked()) {
-    if (confirm('Lock the app? You will need the password again for edit/delete/add.')) clearPass();
-  } else {
-    promptPassword();
-  }
-}
-
-function promptPassword(cb) {
-  var p = prompt('Enter admin password:');
-  if (!p) { if (cb) cb(false); return; }
-  fetch('/api/verify', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ password: p })
-  }).then(function(r) {
-    if (r.ok) {
-      setPass(p);
-      if (cb) cb(true);
-    } else {
-      alert('Wrong password.');
-      if (cb) cb(false);
-    }
-  });
-}
-
-// Ensures unlocked before running cb()
-function withAuth(cb) {
-  if (isUnlocked()) return cb();
-  promptPassword(function(ok) { if (ok) cb(); });
-}
-
-function escapeHtml(s) {
-  s = String(s == null ? '' : s);
-  return s.replace(/[&<>"']/g, function(c) {
-    return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;' }[c];
-  });
-}
-
-function uid() {
-  return 'i' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-}
-
-function parseItem(line) {
-  line = line.trim();
-  // Try " - " first
-  var idx = line.lastIndexOf(' - ');
-  if (idx !== -1) return { text: line.substring(0, idx).trim(), pic: line.substring(idx + 3).trim() };
-  // Try " -" at end with no space
-  var m = line.match(/^(.+?)\\s+-([A-Za-z][A-Za-z0-9 /]*)$/);
-  if (m) return { text: m[1].trim(), pic: m[2].trim() };
-  return { text: line, pic: '' };
-}
-
-function activeList() {
-  return data.lists.find(function(l) { return l.id === activeListId; }) || data.lists[0];
-}
-
-function showSaved() {
-  var el = document.getElementById('saveStatus');
-  el.classList.add('show');
-  clearTimeout(saveTimer);
-  saveTimer = setTimeout(function() { el.classList.remove('show'); }, 1200);
-}
-
-function load() {
-  return fetch('/api/data').then(function(r) { return r.json(); }).then(function(d) {
-    data = d;
-    if (!activeListId || !data.lists.find(function(l) { return l.id === activeListId; })) {
-      activeListId = data.lists.length ? data.lists[0].id : null;
-      if (activeListId) localStorage.setItem('activeListId', activeListId);
-    }
-    updateLockUI();
-    render();
-  });
-}
-
-// Admin save (protected) — sends full data, requires password
-function saveAdmin() {
-  return fetch('/api/data', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json', 'X-Admin-Pass': getPass() },
-    body: JSON.stringify({ lists: data.lists, workPlan: data.workPlan })
-  }).then(function(r) {
-    if (r.status === 401) {
-      clearPass();
-      alert('Session expired or wrong password. Please unlock again.');
-      return load();
-    }
-    showSaved();
-  });
-}
-
-function render() {
-  // Show/hide the checklist-only header based on active section
-  var checklistHeader = document.getElementById('checklistHeader');
-  checklistHeader.style.display = (currentSection === 'workplan') ? 'none' : 'block';
-
-  // Work Plan section: render timeline and return
-  if (currentSection === 'workplan') {
-    return renderWorkPlan();
-  }
-
-  // === Checklist section ===
-  // Populate list selector
-  var sel = document.getElementById('listSelect');
-  sel.innerHTML = '';
-  data.lists.forEach(function(l) {
-    var opt = document.createElement('option');
-    opt.value = l.id;
-    opt.textContent = l.name;
-    if (l.id === activeListId) opt.selected = true;
-    sel.appendChild(opt);
-  });
-
-  var list = activeList();
-  var content = document.getElementById('content');
-
-  if (!list) {
-    document.getElementById('progressLabel').textContent = '0 / 0 completed';
-    document.getElementById('progressPct').textContent = '0%';
-    document.getElementById('progressFill').style.width = '0%';
-    document.getElementById('cAll').textContent = '0';
-    document.getElementById('cPending').textContent = '0';
-    document.getElementById('cCompleted').textContent = '0';
-    if (currentTab === 'manage') return renderManage();
-    content.innerHTML = '<div class="empty">No lists yet. Click "Manage" to create one.</div>';
-    return;
-  }
-
-  var items = list.items;
-  var done = items.filter(function(i) { return i.completed; }).length;
-  var total = items.length;
-  var pct = total ? Math.round(done / total * 100) : 0;
-
-  document.getElementById('progressLabel').textContent = done + ' / ' + total + ' completed';
-  document.getElementById('progressPct').textContent = pct + '%';
-  document.getElementById('progressFill').style.width = pct + '%';
-  document.getElementById('cAll').textContent = total;
-  document.getElementById('cPending').textContent = total - done;
-  document.getElementById('cCompleted').textContent = done;
-
-  if (currentTab === 'manage') return renderManage();
-
-  var filtered;
-  if (currentTab === 'pending') filtered = items.filter(function(i) { return !i.completed; });
-  else if (currentTab === 'completed') filtered = items.filter(function(i) { return i.completed; });
-  else filtered = items;
-
-  var html = '';
-  if (filtered.length === 0) {
-    html = '<div class="empty">No items in this view.</div>';
-  } else {
-    html = filtered.map(function(item) {
-      var picBadge = item.pic
-        ? '<span class="pic">👤 ' + escapeHtml(item.pic) + '</span>'
-        : '<span class="pic empty">No PIC</span>';
-      return '<div class="item ' + (item.completed ? 'done' : '') + '">' +
-        '<div class="row">' +
-          '<input type="checkbox" class="check" ' + (item.completed ? 'checked' : '') +
-            ' onchange="toggle(\\'' + item.id + '\\')">' +
-          '<div class="body">' +
-            '<div class="text">' + escapeHtml(item.text) + '</div>' +
-            picBadge +
-          '</div>' +
-          '<div class="actions">' +
-            '<button onclick="openEdit(\\'' + item.id + '\\')" title="Edit">✏️</button>' +
-            '<button onclick="del(\\'' + item.id + '\\')" title="Delete">🗑️</button>' +
-          '</div>' +
-        '</div>' +
-        '<div class="remarks">' +
-          '<textarea placeholder="Add remarks/update..." onblur="updateRemarks(\\'' + item.id + '\\', this.value)">' +
-            escapeHtml(item.remarks || '') +
-          '</textarea>' +
-        '</div>' +
-      '</div>';
-    }).join('');
-  }
-
-  html += '<div class="addItem">' +
-    '<h3>➕ Add New Item</h3>' +
-    '<div class="hint">Tip: End with " - Name" to auto-set PIC. Example: <b>Buy candles - Ron</b></div>' +
-    '<input id="newItemText" type="text" placeholder="Enter task description..." onkeydown="if(event.key===\\'Enter\\')addItem()">' +
-    '<button onclick="addItem()">Add to List</button>' +
-  '</div>';
-
-  content.innerHTML = html;
-}
-
-function renderManage() {
-  var html = '<div class="manage"><h3>📚 Manage Checklists</h3>';
-  if (data.lists.length === 0) {
-    html += '<div style="color:#888;font-size:13px;margin-bottom:10px;">No lists yet. Add one below.</div>';
-  }
-  data.lists.forEach(function(l) {
-    var isActive = l.id === activeListId;
-    html += '<div class="listRow ' + (isActive ? 'active' : '') + '">' +
-      '<span class="name">' + escapeHtml(l.name) +
-        ' <span class="count">(' + l.items.length + ' items)</span></span>';
-    if (isActive) {
-      html += '<span class="activeTag">ACTIVE</span>';
-    } else {
-      html += '<button class="primary" onclick="setActive(\\'' + l.id + '\\')">Use</button>';
-    }
-    html += '<button onclick="renameList(\\'' + l.id + '\\')">Rename</button>' +
-      '<button class="danger" onclick="deleteList(\\'' + l.id + '\\')">Delete</button>' +
-    '</div>';
-  });
-  html += '<div class="addList">' +
-    '<input id="newListName" type="text" placeholder="New checklist name (e.g. Store XYZ - Pre-Opening)" onkeydown="if(event.key===\\'Enter\\')addList()">' +
-    '<button onclick="addList()">Add List</button>' +
-  '</div></div>';
-  document.getElementById('content').innerHTML = html;
-}
-
-// === Work Plan rendering ===
-function renderWorkPlan() {
-  var wp = (data.workPlan && data.workPlan.items) || [];
-  var html = '<div class="wpHeader">' +
-    '<h2>🗓️ Store Opening Work Plan</h2>' +
-    '<p>The sequence of activities for opening day — from store clearing through ribbon cutting and store opening.</p>' +
-    '</div>' +
-    '<div class="wpLegend">' +
-      '<div class="item"><span class="sw"></span> Step</div>' +
-      '<div class="item"><span class="swT">TIME</span> Scheduled time</div>' +
-      '<div class="item">📝 Sub-details below</div>' +
-    '</div>' +
-    '<div class="timeline">';
-
-  if (wp.length === 0) {
-    html += '<div class="empty" style="margin-left:-36px;">No steps yet.</div>';
-  } else {
-    wp.forEach(function(s, idx) {
-      var num = idx + 1;
-      var timeBadge = s.time ? '<span class="time">⏰ ' + escapeHtml(s.time) + '</span>' : '';
-      var detailsHtml = '';
-      if (s.details && s.details.length) {
-        detailsHtml = '<ul class="details">' +
-          s.details.map(function(d) { return '<li>' + escapeHtml(d) + '</li>'; }).join('') +
-          '</ul>';
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID,
+      range: `'${sheetName}'!C${item.rowNumber}:F${item.rowNumber}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [[done ? 'TRUE' : 'FALSE', notes || '', updatedBy || '', updatedAt]]
       }
-      html += '<div class="step">' +
-        '<div class="dot">' + num + '</div>' +
-        '<div class="head">' +
-          '<div class="title">' + escapeHtml(s.title) + '</div>' +
-          timeBadge +
-          '<div class="stepActions">' +
-            '<button onclick="openWpEdit(\\'' + s.id + '\\')" title="Edit">✏️</button>' +
-            '<button onclick="delWpStep(\\'' + s.id + '\\')" title="Delete">🗑️</button>' +
-          '</div>' +
-        '</div>' +
-        detailsHtml +
-      '</div>';
     });
+
+    res.json({ ok: true, sheetName, item: { ...item, done: Boolean(done), notes: notes || '', updatedBy: updatedBy || '', updatedAt } });
+  } catch (error) {
+    next(error);
   }
-
-  html += '</div>' +
-    '<div class="addStep"><button onclick="addWpStep()">➕ Add New Step</button></div>';
-
-  document.getElementById('content').innerHTML = html;
-}
-
-function ensureWorkPlan() {
-  if (!data.workPlan) data.workPlan = { items: [] };
-  if (!Array.isArray(data.workPlan.items)) data.workPlan.items = [];
-}
-
-function openWpEdit(id) {
-  withAuth(function() {
-    ensureWorkPlan();
-    var step = data.workPlan.items.find(function(s) { return s.id === id; });
-    if (!step) return;
-    document.getElementById('wpModalTitle').textContent = 'Edit Step';
-    document.getElementById('wpTime').value = step.time || '';
-    document.getElementById('wpTitle').value = step.title || '';
-    document.getElementById('wpDetails').value = (step.details || []).join('\\n');
-    document.getElementById('wpModal').dataset.editingId = id;
-    document.getElementById('wpModal').dataset.mode = 'edit';
-    document.getElementById('wpModal').classList.add('show');
-  });
-}
-
-function addWpStep() {
-  withAuth(function() {
-    document.getElementById('wpModalTitle').textContent = 'Add New Step';
-    document.getElementById('wpTime').value = '';
-    document.getElementById('wpTitle').value = '';
-    document.getElementById('wpDetails').value = '';
-    document.getElementById('wpModal').dataset.editingId = '';
-    document.getElementById('wpModal').dataset.mode = 'add';
-    document.getElementById('wpModal').classList.add('show');
-  });
-}
-
-function closeWpModal() {
-  document.getElementById('wpModal').classList.remove('show');
-}
-
-function saveWpEdit() {
-  ensureWorkPlan();
-  var modal = document.getElementById('wpModal');
-  var mode = modal.dataset.mode;
-  var time = document.getElementById('wpTime').value.trim();
-  var title = document.getElementById('wpTitle').value.trim();
-  var detailsRaw = document.getElementById('wpDetails').value;
-  var details = detailsRaw.split('\\n').map(function(s) { return s.trim(); }).filter(Boolean);
-  if (!title) { alert('Title is required.'); return; }
-
-  if (mode === 'add') {
-    data.workPlan.items.push({ id: 'w' + Date.now().toString(36), time: time, title: title, details: details });
-  } else {
-    var id = modal.dataset.editingId;
-    var step = data.workPlan.items.find(function(s) { return s.id === id; });
-    if (!step) { closeWpModal(); return; }
-    step.time = time;
-    step.title = title;
-    step.details = details;
-  }
-  closeWpModal();
-  saveAdmin().then(render);
-}
-
-function delWpStep(id) {
-  withAuth(function() {
-    if (!confirm('Delete this step?')) return;
-    ensureWorkPlan();
-    data.workPlan.items = data.workPlan.items.filter(function(s) { return s.id !== id; });
-    saveAdmin().then(render);
-  });
-}
-
-// Primary section tabs (Checklist / Work Plan)
-document.querySelectorAll('.pTab').forEach(function(t) {
-  t.addEventListener('click', function() {
-    document.querySelectorAll('.pTab').forEach(function(x) { x.classList.remove('active'); });
-    t.classList.add('active');
-    currentSection = t.dataset.section;
-    render();
-  });
 });
 
-// Secondary tab handlers (All / Pending / Done / Manage — inside Checklist)
-document.querySelectorAll('.tab').forEach(function(t) {
-  t.addEventListener('click', function() {
-    document.querySelectorAll('.tab').forEach(function(x) { x.classList.remove('active'); });
-    t.classList.add('active');
-    currentTab = t.dataset.tab;
-    render();
-  });
-});
-
-document.getElementById('listSelect').addEventListener('change', function(e) {
-  activeListId = e.target.value;
-  localStorage.setItem('activeListId', activeListId);
-  render();
-});
-
-// OPEN — uses /api/check, no password needed
-function toggle(id) {
-  var list = activeList();
-  if (!list) return;
-  var item = list.items.find(function(i) { return i.id === id; });
-  if (!item) return;
-  item.completed = !item.completed;
-  render();
-  fetch('/api/check', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ listId: list.id, itemId: id, completed: item.completed })
-  }).then(showSaved);
-}
-
-// OPEN — uses /api/remarks, no password needed
-function updateRemarks(id, val) {
-  var list = activeList();
-  if (!list) return;
-  var item = list.items.find(function(i) { return i.id === id; });
-  if (!item) return;
-  if (item.remarks === val) return;
-  item.remarks = val;
-  fetch('/api/remarks', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ listId: list.id, itemId: id, remarks: val })
-  }).then(showSaved);
-}
-
-// PROTECTED
-function del(id) {
-  withAuth(function() {
-    if (!confirm('Delete this item?')) return;
-    var list = activeList();
-    list.items = list.items.filter(function(i) { return i.id !== id; });
-    saveAdmin().then(render);
-  });
-}
-
-function addItem() {
-  withAuth(function() {
-    var input = document.getElementById('newItemText');
-    var val = input.value.trim();
-    if (!val) return;
-    var parsed = parseItem(val);
-    var list = activeList();
-    if (!list) { alert('Create or select a list first.'); return; }
-    list.items.push({
-      id: uid(),
-      text: parsed.text,
-      pic: parsed.pic,
-      completed: false,
-      remarks: ''
+app.post('/api/seed', async (req, res, next) => {
+  try {
+    const sheetName = selectedSheetName(req);
+    const sheets = sheetsClient();
+    await sheets.spreadsheets.values.update({
+      spreadsheetId: SHEET_ID,
+      range: `'${sheetName}'!A1:F${starterTasks.length + 1}`,
+      valueInputOption: 'USER_ENTERED',
+      requestBody: {
+        values: [headers, ...starterTasks]
+      }
     });
-    input.value = '';
-    saveAdmin().then(render);
-  });
-}
 
-function openEdit(id) {
-  withAuth(function() {
-    var list = activeList();
-    var item = list.items.find(function(i) { return i.id === id; });
-    if (!item) return;
-    editingItemId = id;
-    document.getElementById('editText').value = item.text;
-    document.getElementById('editPic').value = item.pic;
-    document.getElementById('editRemarks').value = item.remarks || '';
-    document.getElementById('editModal').classList.add('show');
-  });
-}
-
-function closeModal() {
-  document.getElementById('editModal').classList.remove('show');
-  editingItemId = null;
-}
-
-function saveEdit() {
-  var list = activeList();
-  var item = list.items.find(function(i) { return i.id === editingItemId; });
-  if (!item) return closeModal();
-  item.text = document.getElementById('editText').value.trim();
-  item.pic = document.getElementById('editPic').value.trim();
-  item.remarks = document.getElementById('editRemarks').value;
-  closeModal();
-  saveAdmin().then(render);
-}
-
-function addList() {
-  withAuth(function() {
-    var input = document.getElementById('newListName');
-    var val = input.value.trim();
-    if (!val) return;
-    var id = 'list_' + Date.now().toString(36);
-    data.lists.push({ id: id, name: val, items: [] });
-    activeListId = id;
-    localStorage.setItem('activeListId', activeListId);
-    saveAdmin().then(render);
-  });
-}
-
-// OPEN — just switches local view, no server change
-function setActive(id) {
-  activeListId = id;
-  localStorage.setItem('activeListId', activeListId);
-  render();
-}
-
-function renameList(id) {
-  withAuth(function() {
-    var list = data.lists.find(function(l) { return l.id === id; });
-    if (!list) return;
-    var name = prompt('New name:', list.name);
-    if (name && name.trim()) {
-      list.name = name.trim();
-      saveAdmin().then(render);
-    }
-  });
-}
-
-function deleteList(id) {
-  withAuth(function() {
-    if (data.lists.length <= 1) { alert('Cannot delete the only list. Create another first.'); return; }
-    if (!confirm('Delete this list and ALL its items? This cannot be undone.')) return;
-    data.lists = data.lists.filter(function(l) { return l.id !== id; });
-    if (activeListId === id) {
-      activeListId = data.lists[0].id;
-      localStorage.setItem('activeListId', activeListId);
-    }
-    saveAdmin().then(render);
-  });
-}
-
-// Close modal on outside click
-document.getElementById('editModal').addEventListener('click', function(e) {
-  if (e.target.id === 'editModal') closeModal();
+    res.json({ ok: true, sheetName, insertedRows: starterTasks.length });
+  } catch (error) {
+    next(error);
+  }
 });
-document.getElementById('wpModal').addEventListener('click', function(e) {
-  if (e.target.id === 'wpModal') closeWpModal();
-});
-
-load();
-</script>
-</body>
-</html>`;
 
 app.get('/', (req, res) => {
-  res.set('Content-Type', 'text/html; charset=utf-8');
-  res.send(HTML);
+  res.type('html').send(`<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Opening Checklist</title>
+  <style>
+    :root {
+      --bg: #f5f6f2;
+      --surface: #ffffff;
+      --text: #20251f;
+      --muted: #697368;
+      --line: #dfe4da;
+      --accent: #14684d;
+      --accent-soft: #e6f2ec;
+      --danger: #9d2d20;
+      --amber: #996500;
+      --shadow: 0 12px 32px rgba(24, 36, 28, .1);
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      font-family: Arial, Helvetica, sans-serif;
+      color: var(--text);
+      background: var(--bg);
+    }
+
+    header {
+      position: sticky;
+      top: 0;
+      z-index: 10;
+      border-bottom: 1px solid var(--line);
+      background: rgba(245, 246, 242, .94);
+      backdrop-filter: blur(12px);
+    }
+
+    .wrap {
+      width: min(1160px, calc(100% - 32px));
+      margin: 0 auto;
+    }
+
+    .top {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 20px;
+      align-items: center;
+      padding: 18px 0;
+    }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(24px, 4vw, 40px);
+      line-height: 1.05;
+      letter-spacing: 0;
+    }
+
+    .sub {
+      margin-top: 8px;
+      color: var(--muted);
+      font-size: 14px;
+    }
+
+    .meter {
+      min-width: 230px;
+      text-align: right;
+    }
+
+    .meter strong {
+      display: block;
+      font-size: 28px;
+    }
+
+    .bar {
+      height: 10px;
+      margin-top: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #dce3d8;
+    }
+
+    .bar span {
+      display: block;
+      width: 0;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+      transition: width .2s ease;
+    }
+
+    main { padding: 22px 0 42px; }
+
+    .toolbar {
+      display: flex;
+      flex-wrap: wrap;
+      justify-content: space-between;
+      gap: 10px;
+      margin-bottom: 14px;
+    }
+
+    .group {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      align-items: center;
+    }
+
+    button, input {
+      min-height: 40px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--text);
+      font: inherit;
+      font-size: 14px;
+    }
+
+    button {
+      padding: 0 13px;
+      cursor: pointer;
+    }
+
+    button.active {
+      border-color: var(--accent);
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-weight: 700;
+    }
+
+    button.primary {
+      border-color: var(--accent);
+      background: var(--accent);
+      color: white;
+    }
+
+    button.danger {
+      border-color: #efc5bf;
+      color: var(--danger);
+    }
+
+    input {
+      width: 190px;
+      padding: 0 11px;
+    }
+
+    .status {
+      margin-bottom: 12px;
+      padding: 12px 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      color: var(--muted);
+      line-height: 1.45;
+    }
+
+    .status.warn {
+      border-color: #ead7a7;
+      background: #fff8e6;
+      color: var(--amber);
+    }
+
+    .list {
+      display: grid;
+      gap: 10px;
+    }
+
+    .item {
+      display: grid;
+      grid-template-columns: 28px 1fr minmax(180px, 240px);
+      gap: 12px;
+      align-items: start;
+      min-height: 64px;
+      padding: 14px;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: 0 1px 2px rgba(0, 0, 0, .03);
+    }
+
+    .item.hidden { display: none; }
+
+    .item input[type="checkbox"] {
+      width: 22px;
+      height: 22px;
+      margin: 2px 0 0;
+      accent-color: var(--accent);
+      cursor: pointer;
+    }
+
+    .title {
+      line-height: 1.35;
+      overflow-wrap: anywhere;
+    }
+
+    .item.done .title {
+      color: var(--muted);
+      text-decoration: line-through;
+    }
+
+    .meta {
+      display: grid;
+      gap: 6px;
+    }
+
+    .meta input {
+      width: 100%;
+      min-height: 34px;
+      font-size: 13px;
+    }
+
+    .small {
+      color: var(--muted);
+      font-size: 12px;
+      line-height: 1.3;
+    }
+
+    .toast {
+      position: fixed;
+      right: 18px;
+      bottom: 18px;
+      max-width: min(380px, calc(100vw - 36px));
+      padding: 12px 14px;
+      border-radius: 8px;
+      background: #1e2420;
+      color: #fff;
+      box-shadow: var(--shadow);
+      opacity: 0;
+      transform: translateY(10px);
+      pointer-events: none;
+      transition: .2s ease;
+      font-size: 14px;
+    }
+
+    .toast.show {
+      opacity: 1;
+      transform: translateY(0);
+    }
+
+    @media (max-width: 760px) {
+      .top, .item {
+        grid-template-columns: 1fr;
+      }
+
+      .meter {
+        min-width: 0;
+        text-align: left;
+      }
+
+      .group, .toolbar button, .toolbar input {
+        width: 100%;
+      }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap top">
+      <div>
+        <h1>Opening Checklist</h1>
+        <div class="sub">Connected to Google Sheets as the editable raw data source.</div>
+      </div>
+      <div class="meter">
+        <strong id="percent">0%</strong>
+        <div id="count">Loading...</div>
+        <div class="bar"><span id="bar"></span></div>
+      </div>
+    </div>
+  </header>
+
+  <main class="wrap">
+    <div id="status" class="status">Loading checklist...</div>
+    <div class="toolbar">
+      <div class="group">
+        <span id="sheetTabs" class="group"></span>
+      </div>
+      <div class="group">
+        <button class="active" data-filter="all" type="button">All</button>
+        <button data-filter="open" type="button">Open</button>
+        <button data-filter="done" type="button">Done</button>
+      </div>
+      <div class="group">
+        <input id="name" placeholder="Your name">
+        <button id="refresh" class="primary" type="button">Refresh</button>
+        <button id="seed" type="button">Seed Sheet</button>
+      </div>
+    </div>
+    <section id="list" class="list" aria-label="Checklist"></section>
+  </main>
+
+  <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+  <script>
+    const list = document.getElementById('list');
+    const statusBox = document.getElementById('status');
+    const percent = document.getElementById('percent');
+    const count = document.getElementById('count');
+    const bar = document.getElementById('bar');
+    const toast = document.getElementById('toast');
+    const nameInput = document.getElementById('name');
+    const sheetTabs = document.getElementById('sheetTabs');
+    let items = [];
+    let filter = 'all';
+    let sheetNames = [];
+    let currentSheet = localStorage.getItem('checklist-current-sheet') || '';
+
+    nameInput.value = localStorage.getItem('checklist-user-name') || '';
+    nameInput.addEventListener('input', () => localStorage.setItem('checklist-user-name', nameInput.value));
+
+    function showToast(message) {
+      toast.textContent = message;
+      toast.classList.add('show');
+      clearTimeout(showToast.timer);
+      showToast.timer = setTimeout(() => toast.classList.remove('show'), 2200);
+    }
+
+    async function api(path, options) {
+      const response = await fetch(path, {
+        headers: { 'Content-Type': 'application/json' },
+        ...options
+      });
+
+      const data = await response.json().catch(() => ({}));
+      if (!response.ok) throw new Error(data.message || 'Request failed');
+      return data;
+    }
+
+    function sheetQuery() {
+      return '?sheet=' + encodeURIComponent(currentSheet);
+    }
+
+    function renderSheetTabs() {
+      sheetTabs.innerHTML = '';
+      sheetNames.forEach((sheetName) => {
+        const button = document.createElement('button');
+        button.type = 'button';
+        button.textContent = sheetName;
+        button.className = sheetName === currentSheet ? 'active' : '';
+        button.addEventListener('click', () => {
+          currentSheet = sheetName;
+          localStorage.setItem('checklist-current-sheet', currentSheet);
+          renderSheetTabs();
+          loadItems();
+        });
+        sheetTabs.append(button);
+      });
+    }
+
+    function updateProgress() {
+      const total = items.length;
+      const done = items.filter((item) => item.done).length;
+      const value = total ? Math.round((done / total) * 100) : 0;
+      percent.textContent = value + '%';
+      count.textContent = done + ' of ' + total + ' completed';
+      bar.style.width = value + '%';
+      document.title = value + '% - Opening Checklist';
+    }
+
+    function render() {
+      list.innerHTML = '';
+      items.forEach((item) => {
+        const row = document.createElement('label');
+        row.className = 'item' + (item.done ? ' done' : '');
+        if (filter === 'open' && item.done) row.classList.add('hidden');
+        if (filter === 'done' && !item.done) row.classList.add('hidden');
+
+        const checkbox = document.createElement('input');
+        checkbox.type = 'checkbox';
+        checkbox.checked = item.done;
+        checkbox.addEventListener('change', async () => {
+          const previous = item.done;
+          item.done = checkbox.checked;
+          render();
+          try {
+            await api('/api/items/' + encodeURIComponent(item.id) + sheetQuery(), {
+              method: 'POST',
+              body: JSON.stringify({
+                done: item.done,
+                notes: item.notes,
+                updatedBy: nameInput.value.trim()
+              })
+            });
+            await loadItems(false);
+            showToast('Saved to Google Sheets.');
+          } catch (error) {
+            item.done = previous;
+            render();
+            showToast(error.message);
+          }
+        });
+
+        const title = document.createElement('div');
+        title.className = 'title';
+        title.textContent = item.task;
+
+        const meta = document.createElement('div');
+        meta.className = 'meta';
+        const notes = document.createElement('input');
+        notes.placeholder = 'Notes';
+        notes.value = item.notes || '';
+        notes.addEventListener('change', async () => {
+          item.notes = notes.value;
+          try {
+            await api('/api/items/' + encodeURIComponent(item.id) + sheetQuery(), {
+              method: 'POST',
+              body: JSON.stringify({
+                done: item.done,
+                notes: item.notes,
+                updatedBy: nameInput.value.trim()
+              })
+            });
+            await loadItems(false);
+            showToast('Note saved.');
+          } catch (error) {
+            showToast(error.message);
+          }
+        });
+
+        const small = document.createElement('div');
+        small.className = 'small';
+        small.textContent = item.updatedAt
+          ? 'Updated by ' + (item.updatedBy || 'Team') + ' - ' + new Date(item.updatedAt).toLocaleString()
+          : 'Not updated yet';
+
+        meta.append(notes, small);
+        row.append(checkbox, title, meta);
+        list.append(row);
+      });
+      updateProgress();
+    }
+
+    async function loadItems(showMessage = true) {
+      try {
+        const config = await api('/api/config');
+        if (!config.connected) {
+          statusBox.className = 'status warn';
+          statusBox.textContent = 'Google Sheets is not connected yet. Add GOOGLE_SHEET_ID, GOOGLE_SERVICE_ACCOUNT_EMAIL, and GOOGLE_PRIVATE_KEY in Railway variables. Share the Google Sheet with the service account email.';
+          count.textContent = 'Not connected';
+          return;
+        }
+
+        sheetNames = config.sheetNames || [config.defaultSheetName || 'Checklist'];
+        if (!sheetNames.includes(currentSheet)) currentSheet = config.defaultSheetName || sheetNames[0];
+        localStorage.setItem('checklist-current-sheet', currentSheet);
+        renderSheetTabs();
+
+        const data = await api('/api/items' + sheetQuery());
+        items = data.items;
+        statusBox.className = 'status';
+        statusBox.textContent = items.length
+          ? 'Live sheet loaded from ' + currentSheet + '. Edit task names, add rows, or change raw values directly in Google Sheets.'
+          : 'Connected to ' + currentSheet + ', but no rows found. Click Seed Sheet to add the default checklist.';
+        render();
+        if (showMessage) showToast('Loaded from Google Sheets.');
+      } catch (error) {
+        statusBox.className = 'status warn';
+        statusBox.textContent = error.message;
+      }
+    }
+
+    document.querySelectorAll('[data-filter]').forEach((button) => {
+      button.addEventListener('click', () => {
+        filter = button.dataset.filter;
+        document.querySelectorAll('[data-filter]').forEach((entry) => entry.classList.remove('active'));
+        button.classList.add('active');
+        render();
+      });
+    });
+
+    document.getElementById('refresh').addEventListener('click', () => loadItems());
+    document.getElementById('seed').addEventListener('click', async () => {
+      if (!confirm('Replace A1:F with the default checklist rows?')) return;
+      try {
+        await api('/api/seed' + sheetQuery(), { method: 'POST' });
+        await loadItems(false);
+        showToast('Sheet seeded.');
+      } catch (error) {
+        showToast(error.message);
+      }
+    });
+
+    loadItems(false);
+    setInterval(() => loadItems(false), 15000);
+  </script>
+</body>
+</html>`);
 });
 
-app.listen(PORT, () => {
-  console.log('Checklist running on port ' + PORT);
+app.use((error, req, res, next) => {
+  console.error(error);
+  res.status(error.statusCode || 500).json({
+    message: error.message || 'Server error'
+  });
+});
+
+app.listen(port, () => {
+  console.log(`Opening checklist running on port ${port}`);
 });
