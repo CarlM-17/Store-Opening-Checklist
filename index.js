@@ -12,6 +12,10 @@ const SHEET_NAMES = (process.env.SHEET_NAMES || process.env.SHEET_NAME || 'Check
 const DEFAULT_SHEET_NAME = SHEET_NAMES[0] || 'Checklist';
 const SERVICE_ACCOUNT_EMAIL = process.env.GOOGLE_SERVICE_ACCOUNT_EMAIL || '';
 const PRIVATE_KEY = (process.env.GOOGLE_PRIVATE_KEY || '').replace(/\\n/g, '\n');
+const KNOWN_ASSIGNEES = (process.env.ASSIGNEE_NAMES || 'Janet,Karen,Russel,Joward')
+  .split(',')
+  .map((name) => name.trim())
+  .filter(Boolean);
 
 app.use(express.json({ limit: '1mb' }));
 
@@ -28,8 +32,8 @@ function hasGoogleConfig() {
 function sheetsClient() {
   if (!hasGoogleConfig()) {
     const missing = ['GOOGLE_SHEET_ID', 'GOOGLE_SERVICE_ACCOUNT_EMAIL', 'GOOGLE_PRIVATE_KEY']
-      .filter((key) => !process.env[key]);
-    const error = new Error(`Missing Google Sheets config: ${missing.join(', ')}`);
+      .filter((key) => !process.env[key] && key !== 'GOOGLE_SHEET_ID');
+    const error = new Error(`Missing Google Sheets write config: ${missing.join(', ')}`);
     error.statusCode = 500;
     throw error;
   }
@@ -56,16 +60,47 @@ function isDone(value) {
   return ['true', 'yes', 'y', '1', 'done', 'complete', 'completed'].includes(String(value || '').trim().toLowerCase());
 }
 
+function cleanName(value) {
+  return String(value || '')
+    .replace(/[.:;,-]+$/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function knownNameFrom(value) {
+  const candidate = cleanName(value);
+  return KNOWN_ASSIGNEES.find((name) => name.toLowerCase() === candidate.toLowerCase()) || '';
+}
+
+function extractAssignee(task) {
+  const text = String(task || '').trim();
+  const dashMatch = text.match(/[-–—]\s*([A-Za-z][A-Za-z .']{1,40})\s*$/);
+  if (dashMatch) {
+    const known = knownNameFrom(dashMatch[1]);
+    if (known) return known;
+  }
+
+  const parentheticalMatches = [...text.matchAll(/\(([^()]+)\)/g)];
+  for (let index = parentheticalMatches.length - 1; index >= 0; index -= 1) {
+    const known = knownNameFrom(parentheticalMatches[index][1]);
+    if (known) return known;
+  }
+
+  return 'Unassigned';
+}
+
 function isHeaderRow(row) {
   const normalized = row.map((cell) => String(cell || '').trim().toLowerCase());
   return normalized[0] === 'id' && normalized[1] === 'task';
 }
 
 function rowToItem(row, rowNumber) {
+  const task = row[1] || '';
   return {
     rowNumber,
     id: String(row[0] || `row-${rowNumber}`).trim(),
-    task: row[1] || '',
+    task,
+    assignee: extractAssignee(task),
     done: isDone(row[2]),
     notes: row[3] || '',
     updatedBy: row[4] || '',
@@ -153,7 +188,8 @@ app.get('/api/config', (req, res) => {
     connected: hasGoogleConfig(),
     sheetNames: SHEET_NAMES,
     defaultSheetName: DEFAULT_SHEET_NAME,
-    missing: ['GOOGLE_SHEET_ID', 'GOOGLE_SERVICE_ACCOUNT_EMAIL', 'GOOGLE_PRIVATE_KEY'].filter((key) => !process.env[key])
+    assigneeNames: KNOWN_ASSIGNEES,
+    missing: ['GOOGLE_SERVICE_ACCOUNT_EMAIL', 'GOOGLE_PRIVATE_KEY'].filter((key) => !process.env[key])
   });
 });
 
@@ -224,9 +260,7 @@ app.get('/', (req, res) => {
       margin: 0;
       font-family: Arial, Helvetica, sans-serif;
       color: var(--text);
-      background:
-        linear-gradient(180deg, rgba(20, 104, 77, .08), transparent 300px),
-        var(--bg);
+      background: linear-gradient(180deg, rgba(20, 104, 77, .08), transparent 300px), var(--bg);
     }
 
     header {
@@ -234,9 +268,7 @@ app.get('/', (req, res) => {
       z-index: 10;
       overflow: hidden;
       border-bottom: 1px solid rgba(20, 104, 77, .16);
-      background:
-        linear-gradient(135deg, rgba(20, 104, 77, .16), rgba(199, 147, 44, .12)),
-        rgba(245, 246, 242, .96);
+      background: linear-gradient(135deg, rgba(20, 104, 77, .16), rgba(199, 147, 44, .12)), rgba(245, 246, 242, .96);
     }
 
     .wrap {
@@ -316,14 +348,9 @@ app.get('/', (req, res) => {
       height: 12px;
     }
 
-    .shelf span {
-      border-radius: 3px;
-      background: #dfe8df;
-    }
-
+    .shelf span { border-radius: 3px; background: #dfe8df; }
     .shelf span:nth-child(2) { background: #e7c878; }
     .shelf span:nth-child(3) { background: #88b6a3; }
-    }
 
     .meter {
       min-width: 230px;
@@ -399,7 +426,7 @@ app.get('/', (req, res) => {
       align-items: center;
     }
 
-    button, input {
+    button, select, input {
       min-height: 40px;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -414,6 +441,10 @@ app.get('/', (req, res) => {
       cursor: pointer;
     }
 
+    select, input {
+      padding: 0 11px;
+    }
+
     button.active {
       border-color: var(--accent);
       background: var(--accent-soft);
@@ -425,16 +456,6 @@ app.get('/', (req, res) => {
       border-color: var(--accent);
       background: var(--accent);
       color: white;
-    }
-
-    button.danger {
-      border-color: #efc5bf;
-      color: var(--danger);
-    }
-
-    input {
-      width: 190px;
-      padding: 0 11px;
     }
 
     .status {
@@ -495,6 +516,18 @@ app.get('/', (req, res) => {
     .title {
       line-height: 1.35;
       overflow-wrap: anywhere;
+      cursor: pointer;
+    }
+
+    .person {
+      display: inline-block;
+      margin-top: 8px;
+      padding: 4px 8px;
+      border-radius: 999px;
+      background: var(--accent-soft);
+      color: var(--accent);
+      font-size: 12px;
+      font-weight: 700;
     }
 
     .item.done .title {
@@ -502,9 +535,7 @@ app.get('/', (req, res) => {
       text-decoration: line-through;
     }
 
-    .item.done::before {
-      opacity: .65;
-    }
+    .item.done::before { opacity: .65; }
 
     .meta {
       display: grid;
@@ -521,6 +552,71 @@ app.get('/', (req, res) => {
       color: var(--muted);
       font-size: 12px;
       line-height: 1.3;
+    }
+
+    .person-summary {
+      display: grid;
+      gap: 12px;
+    }
+
+    .person-card {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: var(--surface);
+      box-shadow: 0 4px 14px rgba(24, 36, 28, .05);
+      overflow: hidden;
+    }
+
+    .person-head {
+      display: grid;
+      grid-template-columns: 1fr auto;
+      gap: 10px;
+      align-items: center;
+      padding: 14px 16px;
+      border-bottom: 1px solid var(--line);
+      background: #fbfcf8;
+    }
+
+    .person-head h2 {
+      margin: 0;
+      font-size: 18px;
+      letter-spacing: 0;
+    }
+
+    .person-head span {
+      color: var(--muted);
+      font-size: 13px;
+      white-space: nowrap;
+    }
+
+    .mini-bar {
+      grid-column: 1 / -1;
+      height: 8px;
+      overflow: hidden;
+      border-radius: 999px;
+      background: #dce3d8;
+    }
+
+    .mini-bar span {
+      display: block;
+      height: 100%;
+      border-radius: inherit;
+      background: var(--accent);
+    }
+
+    .person-tasks {
+      margin: 0;
+      padding: 12px 16px 14px 34px;
+      line-height: 1.45;
+    }
+
+    .person-tasks li {
+      margin: 6px 0;
+    }
+
+    .person-tasks li.done {
+      color: var(--muted);
+      text-decoration: line-through;
     }
 
     .toast {
@@ -546,7 +642,7 @@ app.get('/', (req, res) => {
     }
 
     @media (max-width: 760px) {
-      .top, .item, .summary {
+      .top, .item, .summary, .person-head {
         grid-template-columns: 1fr;
       }
 
@@ -555,7 +651,7 @@ app.get('/', (req, res) => {
         text-align: left;
       }
 
-      .group, .toolbar button {
+      .group, .toolbar button, .toolbar select {
         width: 100%;
       }
     }
@@ -596,32 +692,45 @@ app.get('/', (req, res) => {
         <span id="sheetTabs" class="group"></span>
       </div>
       <div class="group">
+        <button class="active" data-view="tasks" type="button">Task Board</button>
+        <button data-view="people" type="button">Person Summary</button>
+      </div>
+      <div class="group" id="taskFilters">
         <button class="active" data-filter="all" type="button">All</button>
         <button data-filter="open" type="button">Open</button>
         <button data-filter="done" type="button">Done</button>
+        <select id="assigneeFilter" aria-label="Filter by assigned person">
+          <option value="all">All assigned persons</option>
+        </select>
       </div>
       <div class="group">
         <button id="refresh" class="primary" type="button">Refresh</button>
       </div>
     </div>
     <section id="list" class="list" aria-label="Checklist"></section>
+    <section id="personSummary" class="person-summary" aria-label="Person Summary" hidden></section>
   </main>
 
   <div id="toast" class="toast" role="status" aria-live="polite"></div>
 
   <script>
     const list = document.getElementById('list');
+    const personSummary = document.getElementById('personSummary');
+    const taskFilters = document.getElementById('taskFilters');
     const statusBox = document.getElementById('status');
     const percent = document.getElementById('percent');
     const count = document.getElementById('count');
     const bar = document.getElementById('bar');
     const toast = document.getElementById('toast');
     const sheetTabs = document.getElementById('sheetTabs');
+    const assigneeFilter = document.getElementById('assigneeFilter');
     const activeSheet = document.getElementById('activeSheet');
     const openTasks = document.getElementById('openTasks');
     const doneTasks = document.getElementById('doneTasks');
     let items = [];
     let filter = 'all';
+    let view = 'tasks';
+    let selectedAssignee = 'all';
     let sheetNames = [];
     let currentSheet = new URLSearchParams(window.location.search).get('sheet') || '';
 
@@ -647,6 +756,27 @@ app.get('/', (req, res) => {
       return '?sheet=' + encodeURIComponent(currentSheet);
     }
 
+    function personNames() {
+      return [...new Set(items.map((item) => item.assignee || 'Unassigned'))].sort((a, b) => {
+        if (a === 'Unassigned') return 1;
+        if (b === 'Unassigned') return -1;
+        return a.localeCompare(b);
+      });
+    }
+
+    function renderAssigneeFilter() {
+      const names = personNames();
+      if (selectedAssignee !== 'all' && !names.includes(selectedAssignee)) selectedAssignee = 'all';
+      assigneeFilter.innerHTML = '<option value="all">All assigned persons</option>';
+      names.forEach((name) => {
+        const option = document.createElement('option');
+        option.value = name;
+        option.textContent = name;
+        option.selected = selectedAssignee === name;
+        assigneeFilter.append(option);
+      });
+    }
+
     function renderSheetTabs() {
       sheetTabs.innerHTML = '';
       sheetNames.forEach((sheetName) => {
@@ -656,6 +786,7 @@ app.get('/', (req, res) => {
         button.className = sheetName === currentSheet ? 'active' : '';
         button.addEventListener('click', () => {
           currentSheet = sheetName;
+          selectedAssignee = 'all';
           const url = new URL(window.location.href);
           url.searchParams.set('sheet', currentSheet);
           window.history.replaceState({}, '', url);
@@ -680,13 +811,20 @@ app.get('/', (req, res) => {
       document.title = value + '% - Store Opening Checklist';
     }
 
-    function render() {
+    function filteredItems() {
+      return items.filter((item) => {
+        if (filter === 'open' && item.done) return false;
+        if (filter === 'done' && !item.done) return false;
+        if (selectedAssignee !== 'all' && item.assignee !== selectedAssignee) return false;
+        return true;
+      });
+    }
+
+    function renderTasks() {
       list.innerHTML = '';
-      items.forEach((item) => {
+      filteredItems().forEach((item) => {
         const row = document.createElement('div');
         row.className = 'item' + (item.done ? ' done' : '');
-        if (filter === 'open' && item.done) row.classList.add('hidden');
-        if (filter === 'done' && !item.done) row.classList.add('hidden');
 
         const checkbox = document.createElement('input');
         checkbox.type = 'checkbox';
@@ -713,10 +851,16 @@ app.get('/', (req, res) => {
           }
         });
 
+        const content = document.createElement('div');
         const title = document.createElement('div');
         title.className = 'title';
         title.textContent = item.task;
         title.addEventListener('click', () => checkbox.click());
+
+        const person = document.createElement('span');
+        person.className = 'person';
+        person.textContent = item.assignee || 'Unassigned';
+        content.append(title, person);
 
         const meta = document.createElement('div');
         meta.className = 'meta';
@@ -748,10 +892,74 @@ app.get('/', (req, res) => {
           : 'Not updated yet';
 
         meta.append(notes, small);
-        row.append(checkbox, title, meta);
+        row.append(checkbox, content, meta);
         list.append(row);
       });
+
+      if (!list.children.length) {
+        const empty = document.createElement('div');
+        empty.className = 'status';
+        empty.textContent = 'No tasks match the current filters.';
+        list.append(empty);
+      }
+    }
+
+    function groupedPeople() {
+      return personNames().map((name) => {
+        const personItems = items.filter((item) => item.assignee === name);
+        const done = personItems.filter((item) => item.done).length;
+        return {
+          name,
+          items: personItems,
+          done,
+          open: personItems.length - done,
+          total: personItems.length,
+          percent: personItems.length ? Math.round((done / personItems.length) * 100) : 0
+        };
+      });
+    }
+
+    function renderPersonSummary() {
+      personSummary.innerHTML = '';
+      groupedPeople().forEach((person) => {
+        const card = document.createElement('article');
+        card.className = 'person-card';
+
+        const head = document.createElement('div');
+        head.className = 'person-head';
+        const title = document.createElement('h2');
+        title.textContent = person.name;
+        const stats = document.createElement('span');
+        stats.textContent = person.done + '/' + person.total + ' done - ' + person.open + ' open';
+        const mini = document.createElement('div');
+        mini.className = 'mini-bar';
+        const fill = document.createElement('span');
+        fill.style.width = person.percent + '%';
+        mini.append(fill);
+        head.append(title, stats, mini);
+
+        const tasks = document.createElement('ul');
+        tasks.className = 'person-tasks';
+        person.items.forEach((item) => {
+          const task = document.createElement('li');
+          task.className = item.done ? 'done' : '';
+          task.textContent = item.task;
+          tasks.append(task);
+        });
+
+        card.append(head, tasks);
+        personSummary.append(card);
+      });
+    }
+
+    function render() {
+      renderAssigneeFilter();
       updateProgress();
+      list.hidden = view !== 'tasks';
+      personSummary.hidden = view !== 'people';
+      taskFilters.hidden = view !== 'tasks';
+      if (view === 'tasks') renderTasks();
+      if (view === 'people') renderPersonSummary();
     }
 
     async function loadItems(showMessage = true) {
@@ -782,6 +990,20 @@ app.get('/', (req, res) => {
         button.classList.add('active');
         render();
       });
+    });
+
+    document.querySelectorAll('[data-view]').forEach((button) => {
+      button.addEventListener('click', () => {
+        view = button.dataset.view;
+        document.querySelectorAll('[data-view]').forEach((entry) => entry.classList.remove('active'));
+        button.classList.add('active');
+        render();
+      });
+    });
+
+    assigneeFilter.addEventListener('change', () => {
+      selectedAssignee = assigneeFilter.value;
+      render();
     });
 
     document.getElementById('refresh').addEventListener('click', () => loadItems());
