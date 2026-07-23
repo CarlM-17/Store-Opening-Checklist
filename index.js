@@ -16,6 +16,8 @@ const KNOWN_ASSIGNEES = (process.env.ASSIGNEE_NAMES || 'Janet,Karen,Russel,Jowar
   .split(',')
   .map((name) => name.trim())
   .filter(Boolean);
+const SHEET_CACHE_MS = Number(process.env.SHEET_CACHE_MS || 45000);
+const sheetCache = new Map();
 
 app.use(express.json({ limit: '1mb' }));
 
@@ -150,7 +152,14 @@ function parseCsv(csv) {
   return rows;
 }
 
-async function readItems(sheetName) {
+async function readItems(sheetName, options = {}) {
+  const cacheKey = sheetName;
+  const cached = sheetCache.get(cacheKey);
+  if (!options.force && cached && Date.now() - cached.time < SHEET_CACHE_MS) {
+    return cached.items;
+  }
+
+  let items;
   if (!hasGoogleConfig()) {
     const url = `https://docs.google.com/spreadsheets/d/${SHEET_ID}/gviz/tq?tqx=out:csv&sheet=${encodeURIComponent(sheetName)}`;
     const response = await fetch(url);
@@ -160,7 +169,9 @@ async function readItems(sheetName) {
       throw error;
     }
 
-    return rowsToItems(parseCsv(await response.text()));
+    items = rowsToItems(parseCsv(await response.text()));
+    sheetCache.set(cacheKey, { time: Date.now(), items });
+    return items;
   }
 
   const sheets = sheetsClient();
@@ -169,11 +180,13 @@ async function readItems(sheetName) {
     range: `'${sheetName}'!A:F`
   });
 
-  return rowsToItems(response.data.values || []);
+  items = rowsToItems(response.data.values || []);
+  sheetCache.set(cacheKey, { time: Date.now(), items });
+  return items;
 }
 
 async function findItemRow(sheetName, id) {
-  const items = await readItems(sheetName);
+  const items = await readItems(sheetName, { force: true });
   const item = items.find((entry) => entry.id === id);
   if (!item) {
     const error = new Error('Task not found in Google Sheet.');
@@ -196,7 +209,8 @@ app.get('/api/config', (req, res) => {
 app.get('/api/items', async (req, res, next) => {
   try {
     const sheetName = selectedSheetName(req);
-    res.json({ sheetName, items: await readItems(sheetName) });
+    const force = req.query.fresh === '1';
+    res.json({ sheetName, items: await readItems(sheetName, { force }) });
   } catch (error) {
     next(error);
   }
@@ -225,6 +239,7 @@ app.post('/api/items/:id', async (req, res, next) => {
       }
     });
 
+    sheetCache.delete(sheetName);
     res.json({ ok: true, sheetName, item: { ...item, done: Boolean(done), notes: notes || '', updatedBy: updatedBy || '', updatedAt } });
   } catch (error) {
     next(error);
@@ -255,6 +270,8 @@ app.get('/', (req, res) => {
     }
 
     * { box-sizing: border-box; }
+
+    [hidden] { display: none !important; }
 
     body {
       margin: 0;
@@ -733,6 +750,7 @@ app.get('/', (req, res) => {
     let selectedAssignee = 'all';
     let sheetNames = [];
     let currentSheet = new URLSearchParams(window.location.search).get('sheet') || '';
+    let appConfig = null;
 
     function showToast(message) {
       toast.textContent = message;
@@ -752,8 +770,13 @@ app.get('/', (req, res) => {
       return data;
     }
 
-    function sheetQuery() {
-      return '?sheet=' + encodeURIComponent(currentSheet);
+    function sheetQuery(force = false) {
+      return '?sheet=' + encodeURIComponent(currentSheet) + (force ? '&fresh=1' : '');
+    }
+
+    async function config() {
+      if (!appConfig) appConfig = await api('/api/config');
+      return appConfig;
     }
 
     function personNames() {
@@ -842,7 +865,9 @@ app.get('/', (req, res) => {
                 updatedBy: 'Checklist App'
               })
             });
-            await loadItems(false);
+            item.updatedBy = 'Checklist App';
+            item.updatedAt = new Date().toISOString();
+            render();
             showToast('Saved to Google Sheets.');
           } catch (error) {
             item.done = previous;
@@ -870,7 +895,7 @@ app.get('/', (req, res) => {
         notes.addEventListener('change', async () => {
           item.notes = notes.value;
           try {
-            await api('/api/items/' + encodeURIComponent(item.id) + sheetQuery(), {
+            const result = await api('/api/items/' + encodeURIComponent(item.id) + sheetQuery(), {
               method: 'POST',
               body: JSON.stringify({
                 done: item.done,
@@ -878,7 +903,12 @@ app.get('/', (req, res) => {
                 updatedBy: 'Checklist App'
               })
             });
-            await loadItems(false);
+            if (result.item) {
+              item.notes = result.item.notes;
+              item.updatedBy = result.item.updatedBy;
+              item.updatedAt = result.item.updatedAt;
+            }
+            render();
             showToast('Note saved.');
           } catch (error) {
             showToast(error.message);
@@ -952,24 +982,29 @@ app.get('/', (req, res) => {
       });
     }
 
+    function setVisible(element, visible) {
+      element.hidden = !visible;
+      element.style.display = visible ? '' : 'none';
+    }
+
     function render() {
       renderAssigneeFilter();
       updateProgress();
-      list.hidden = view !== 'tasks';
-      personSummary.hidden = view !== 'people';
-      taskFilters.hidden = view !== 'tasks';
+      setVisible(list, view === 'tasks');
+      setVisible(personSummary, view === 'people');
+      setVisible(taskFilters, view === 'tasks');
       if (view === 'tasks') renderTasks();
       if (view === 'people') renderPersonSummary();
     }
 
-    async function loadItems(showMessage = true) {
+    async function loadItems(showMessage = true, force = false) {
       try {
-        const config = await api('/api/config');
-        sheetNames = config.sheetNames || [config.defaultSheetName || 'Checklist'];
-        if (!sheetNames.includes(currentSheet)) currentSheet = config.defaultSheetName || sheetNames[0];
+        const cfg = await config();
+        sheetNames = cfg.sheetNames || [cfg.defaultSheetName || 'Checklist'];
+        if (!sheetNames.includes(currentSheet)) currentSheet = cfg.defaultSheetName || sheetNames[0];
         renderSheetTabs();
 
-        const data = await api('/api/items' + sheetQuery());
+        const data = await api('/api/items' + sheetQuery(force));
         items = data.items;
         statusBox.className = 'status';
         statusBox.textContent = items.length
@@ -983,33 +1018,36 @@ app.get('/', (req, res) => {
       }
     }
 
-    document.querySelectorAll('[data-filter]').forEach((button) => {
-      button.addEventListener('click', () => {
-        filter = button.dataset.filter;
-        document.querySelectorAll('[data-filter]').forEach((entry) => entry.classList.remove('active'));
-        button.classList.add('active');
-        render();
-      });
-    });
-
-    document.querySelectorAll('[data-view]').forEach((button) => {
-      button.addEventListener('click', () => {
-        view = button.dataset.view;
+    document.addEventListener('click', (event) => {
+      const viewButton = event.target.closest('[data-view]');
+      if (viewButton) {
+        view = viewButton.dataset.view;
         document.querySelectorAll('[data-view]').forEach((entry) => entry.classList.remove('active'));
-        button.classList.add('active');
+        viewButton.classList.add('active');
         render();
-      });
+        return;
+      }
+
+      const filterButton = event.target.closest('[data-filter]');
+      if (filterButton) {
+        filter = filterButton.dataset.filter;
+        document.querySelectorAll('[data-filter]').forEach((entry) => entry.classList.remove('active'));
+        filterButton.classList.add('active');
+        render();
+      }
     });
 
-    assigneeFilter.addEventListener('change', () => {
-      selectedAssignee = assigneeFilter.value;
-      render();
+    document.addEventListener('change', (event) => {
+      if (event.target === assigneeFilter) {
+        selectedAssignee = assigneeFilter.value;
+        render();
+      }
     });
 
-    document.getElementById('refresh').addEventListener('click', () => loadItems());
+    document.getElementById('refresh').addEventListener('click', () => loadItems(true, true));
 
     loadItems(false);
-    setInterval(() => loadItems(false), 15000);
+    setInterval(() => loadItems(false), 60000);
   </script>
 </body>
 </html>`);
