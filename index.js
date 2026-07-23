@@ -683,7 +683,7 @@ app.get('/', (req, res) => {
     function render() {
       list.innerHTML = '';
       items.forEach((item) => {
-        const row = document.createElement('label');
+        const row = document.createElement('div');
         row.className = 'item' + (item.done ? ' done' : '');
         if (filter === 'open' && item.done) row.classList.add('hidden');
         if (filter === 'done' && !item.done) row.classList.add('hidden');
@@ -716,6 +716,7 @@ app.get('/', (req, res) => {
         const title = document.createElement('div');
         title.className = 'title';
         title.textContent = item.task;
+        title.addEventListener('click', () => checkbox.click());
 
         const meta = document.createElement('div');
         meta.className = 'meta';
